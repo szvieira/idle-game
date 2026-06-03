@@ -200,11 +200,11 @@ export class CombatVisualizer {
   }
 
   private floatText(worldX: number, worldY: number, text: string, color: string): void {
-    const t = this.scene.add.text(worldX, worldY, text, { font: '13px monospace', color }).setOrigin(0.5)
+    const t = this.track(this.scene.add.text(worldX, worldY, text, { font: '13px monospace', color }).setOrigin(0.5))
     this.scene.tweens.add({
       targets: t, y: worldY - 28, alpha: 0,
       duration: 900, ease: 'Power1',
-      onComplete: () => t.destroy(),
+      onComplete: () => { if (t.active) t.destroy() },
     })
   }
 }
