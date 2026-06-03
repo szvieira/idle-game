@@ -12,7 +12,7 @@ export class BootScene extends Phaser.Scene {
       if (characters.length === 0) {
         this.scene.start('CharacterCreate')
       } else {
-        this.scene.start('CharacterSelect', { characters })
+        this.scene.start('CharacterSelect')
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'

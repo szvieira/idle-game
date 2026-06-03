@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import type { Character } from '../types/api'
+import { getCharacters } from '../api/characters'
 import { GameState } from '../state/GameState'
 
 export class CharacterSelectScene extends Phaser.Scene {
@@ -7,7 +7,17 @@ export class CharacterSelectScene extends Phaser.Scene {
     super({ key: 'CharacterSelect' })
   }
 
-  create(data: { characters: Character[] }): void {
+  async create(): Promise<void> {
+    try {
+      const characters = await getCharacters()
+      this.render(characters)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      this.add.text(10, 10, 'Error: ' + msg, { font: '16px monospace', color: '#ff4444' })
+    }
+  }
+
+  private render(characters: Awaited<ReturnType<typeof getCharacters>>): void {
     const { width } = this.scale
 
     this.add.text(width / 2, 30, 'Select Your Character', {
@@ -20,7 +30,7 @@ export class CharacterSelectScene extends Phaser.Scene {
     const cardX = width / 2
     const startY = 100
 
-    data.characters.forEach((char, i) => {
+    characters.forEach((char, i) => {
       const y = startY + i * (cardH + 10)
       const bg = this.add.rectangle(cardX, y + cardH / 2, cardW, cardH, 0x222222)
         .setStrokeStyle(1, 0x444444)
@@ -39,7 +49,7 @@ export class CharacterSelectScene extends Phaser.Scene {
       })
     })
 
-    const createY = startY + data.characters.length * (cardH + 10) + 20
+    const createY = startY + characters.length * (cardH + 10) + 20
     const createBtn = this.add.rectangle(cardX, createY + 20, 200, 40, 0x334455)
       .setStrokeStyle(1, 0x6688aa)
       .setInteractive({ useHandCursor: true })
