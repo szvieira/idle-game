@@ -26,13 +26,14 @@ type expeditionRun struct {
 }
 
 type expeditionRunResponse struct {
-	ID             string    `json:"id"`
-	CharacterID    string    `json:"character_id"`
-	ZoneID         string    `json:"zone_id"`
-	ZoneName       string    `json:"zone_name"`
-	Status         string    `json:"status"`
-	StartedAt      time.Time `json:"started_at"`
-	ElapsedSeconds int64     `json:"elapsed_seconds"`
+	ID             string          `json:"id"`
+	CharacterID    string          `json:"character_id"`
+	ZoneID         string          `json:"zone_id"`
+	ZoneName       string          `json:"zone_name"`
+	Status         string          `json:"status"`
+	StartedAt      time.Time       `json:"started_at"`
+	ElapsedSeconds int64           `json:"elapsed_seconds"`
+	Zone           zoneDefResponse `json:"zone_def"`
 }
 
 type collectExpeditionResponse struct {
@@ -49,6 +50,38 @@ type switchZoneResponse struct {
 	ZoneID   string                    `json:"zone_id"`
 	ZoneName string                    `json:"zone_name"`
 	Collect  collectExpeditionResponse `json:"collect"`
+}
+
+type enemyDefResponse struct {
+	Name    string `json:"name"`
+	HP      int    `json:"hp"`
+	Attack  int    `json:"attack"`
+	Defense int    `json:"defense"`
+}
+
+type zoneRoomDefResponse struct {
+	XP      int                `json:"xp"`
+	Gold    int                `json:"gold"`
+	Enemies []enemyDefResponse `json:"enemies"`
+}
+
+type zoneDefResponse struct {
+	ID       string               `json:"id"`
+	Name     string               `json:"name"`
+	MinLevel int                  `json:"min_level"`
+	Rooms    []zoneRoomDefResponse `json:"rooms"`
+}
+
+func zoneToResponse(z *expedition.Zone) zoneDefResponse {
+	rooms := make([]zoneRoomDefResponse, len(z.Rooms))
+	for i, r := range z.Rooms {
+		enemies := make([]enemyDefResponse, len(r.Enemies))
+		for j, e := range r.Enemies {
+			enemies[j] = enemyDefResponse{Name: e.Name, HP: e.HP, Attack: e.Attack, Defense: e.Defense}
+		}
+		rooms[i] = zoneRoomDefResponse{XP: r.XP, Gold: r.Gold, Enemies: enemies}
+	}
+	return zoneDefResponse{ID: z.ID, Name: z.Name, MinLevel: z.MinLevel, Rooms: rooms}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -171,16 +204,20 @@ func (s *server) persistCollect(r *http.Request, charID, runID, newZoneID string
 	return loot, nil
 }
 
-func runToResponse(run *expeditionRun, zoneName string) expeditionRunResponse {
-	return expeditionRunResponse{
+func runToResponse(run *expeditionRun, zone *expedition.Zone) expeditionRunResponse {
+	resp := expeditionRunResponse{
 		ID:             run.id,
 		CharacterID:    run.characterID,
 		ZoneID:         run.zoneID,
-		ZoneName:       zoneName,
 		Status:         run.status,
 		StartedAt:      run.startedAt,
 		ElapsedSeconds: elapsedSeconds(run),
 	}
+	if zone != nil {
+		resp.ZoneName = zone.Name
+		resp.Zone = zoneToResponse(zone)
+	}
+	return resp
 }
 
 // ── POST /expedition-runs ─────────────────────────────────────────────────────
@@ -242,12 +279,9 @@ func (s *server) handleStartExpedition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run may already exist with a different zone; use the actual run's zone name
-	actualZoneName := run.zoneID
-	if z := expedition.GetZone(run.zoneID); z != nil {
-		actualZoneName = z.Name
-	}
-	writeJSON(w, http.StatusCreated, runToResponse(run, actualZoneName))
+	// Run may already exist with a different zone; use the actual run's zone
+	actualZone := expedition.GetZone(run.zoneID)
+	writeJSON(w, http.StatusCreated, runToResponse(run, actualZone))
 }
 
 // ── GET /expedition-runs/{id} ─────────────────────────────────────────────────
@@ -264,12 +298,8 @@ func (s *server) handleGetExpedition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zoneName := run.zoneID
-	if z := expedition.GetZone(run.zoneID); z != nil {
-		zoneName = z.Name
-	}
-
-	writeJSON(w, http.StatusOK, runToResponse(run, zoneName))
+	zone := expedition.GetZone(run.zoneID)
+	writeJSON(w, http.StatusOK, runToResponse(run, zone))
 }
 
 // ── POST /expedition-runs/{id}/collect ───────────────────────────────────────
