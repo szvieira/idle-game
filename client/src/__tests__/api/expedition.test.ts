@@ -17,6 +17,12 @@ const makeRun = (): ExpeditionRun => ({
   status: 'active',
   started_at: '2026-06-01T00:00:00Z',
   elapsed_seconds: 120,
+  zone_def: {
+    id: 'forest',
+    name: 'Forest',
+    min_level: 1,
+    rooms: [],
+  },
 })
 
 const makeCollect = (): CollectResult => ({
@@ -28,7 +34,8 @@ const makeCollect = (): CollectResult => ({
   character: {
     id: 'char-1', name: 'Aldric', class: 'Warrior', level: 1,
     xp: 50, xp_to_next: 50, gold: 20, hp: 120, max_hp: 120,
-    mana: 30, max_mana: 30, attack: 15, defense: 10, critical: 5, cdr: 0,
+    attack: 15, defense: 10, critical: 5, cdr: 0,
+    special_name: 'Slash', special_mult: 1.5, special_heal: 0, special_cd: 5,
   },
   loot: [],
 })

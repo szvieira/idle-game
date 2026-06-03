@@ -35,7 +35,6 @@ export class CharacterSheetScene extends Phaser.Scene {
 
     const rightStats = [
       `HP:       ${char.hp} / ${char.max_hp}`,
-      `Mana:     ${char.mana} / ${char.max_mana}`,
       `Attack:   ${char.attack}`,
       `Defense:  ${char.defense}`,
       `Critical: ${char.critical}`,
