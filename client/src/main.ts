@@ -10,6 +10,7 @@ new Phaser.Game({
   width: 800,
   height: 600,
   backgroundColor: '#111111',
+  parent: document.body,
   dom: { createContainer: true },
   scene: [BootScene, CharacterSelectScene, CharacterCreateScene, HubScene, CharacterSheetScene],
 })
