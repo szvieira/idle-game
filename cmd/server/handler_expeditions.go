@@ -78,21 +78,23 @@ func elapsedSeconds(run *expeditionRun) int64 {
 
 func buildCharResp(sc *serverChar, result expedition.CollectResult) characterResponse {
 	return characterResponse{
-		ID:       sc.id,
-		Name:     sc.name,
-		Class:    sc.c.Class,
-		Level:    result.NewLevel,
-		XP:       result.NewXP,
-		XPToNext: result.NewXPToNext,
-		Gold:     result.NewGold,
-		HP:       result.NewHP,
-		MaxHP:    result.NewMaxHP,
-		Mana:     sc.c.Mana,
-		MaxMana:  sc.c.MaxMana,
-		Attack:   result.NewAttack,
-		Defense:  sc.c.Defense,
-		Critical: sc.c.Critical,
-		CDR:      sc.c.CDR,
+		ID:          sc.id,
+		Name:        sc.name,
+		Class:       sc.c.Class,
+		Level:       result.NewLevel,
+		XP:          result.NewXP,
+		XPToNext:    result.NewXPToNext,
+		Gold:        result.NewGold,
+		HP:          result.NewHP,
+		MaxHP:       result.NewMaxHP,
+		Attack:      result.NewAttack,
+		Defense:     sc.c.Defense,
+		Critical:    sc.c.Critical,
+		CDR:         sc.c.CDR,
+		SpecialName: sc.c.SpecialName,
+		SpecialMult: sc.c.SpecialMult,
+		SpecialHeal: sc.c.SpecialHeal,
+		SpecialCD:   sc.c.SpecialCD,
 	}
 }
 
