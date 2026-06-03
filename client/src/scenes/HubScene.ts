@@ -3,12 +3,14 @@ import type { ExpeditionRun } from '../types/api'
 import { startExpedition, collectExpedition } from '../api/expedition'
 import { GameState } from '../state/GameState'
 import { formatElapsed } from '../utils'
+import { CombatVisualizer } from '../combat/CombatVisualizer'
 
 export class HubScene extends Phaser.Scene {
   private elapsedText!: Phaser.GameObjects.Text
   private collectResultText!: Phaser.GameObjects.Text
   private cannotSurviveText!: Phaser.GameObjects.Text
   private timerEvent!: Phaser.Time.TimerEvent
+  private visualizer: CombatVisualizer | null = null
 
   constructor() {
     super({ key: 'Hub' })
@@ -35,76 +37,69 @@ export class HubScene extends Phaser.Scene {
 
   private buildUI(): void {
     if (this.timerEvent) this.timerEvent.destroy()
+    if (this.visualizer) { this.visualizer.stop(); this.visualizer = null }
     this.children.removeAll(true)
 
     const char = GameState.instance.character!
-    const run = GameState.instance.expeditionRun!
+    const run  = GameState.instance.expeditionRun!
     const { width } = this.scale
 
-    // Header bar
+    // Header
     this.add.rectangle(width / 2, 25, width, 50, 0x1a1a2e)
     this.add.text(20, 12, `${char.name}    ${char.class}    Lv.${char.level}`, {
-      font: '16px monospace',
-      color: '#ffffff',
+      font: '16px monospace', color: '#ffffff',
     })
 
     this.buildExpeditionPanel(run)
     this.buildDungeonPanel()
     this.buildRaidPanel()
 
-    // Character Sheet nav
+    // Nav buttons
     const sheetBtn = this.add.rectangle(200, 560, 200, 40, 0x334455)
-      .setStrokeStyle(1, 0x6688aa)
-      .setInteractive({ useHandCursor: true })
+      .setStrokeStyle(1, 0x6688aa).setInteractive({ useHandCursor: true })
     this.add.text(200, 560, 'Character Sheet', { font: '14px monospace', color: '#ffffff' }).setOrigin(0.5)
     sheetBtn.on('pointerover', () => sheetBtn.setFillStyle(0x445566))
     sheetBtn.on('pointerout',  () => sheetBtn.setFillStyle(0x334455))
-    sheetBtn.on('pointerdown', () => this.scene.start('CharacterSheet'))
+    sheetBtn.on('pointerdown', () => { this.visualizer?.stop(); this.scene.start('CharacterSheet') })
 
-    // Switch Character nav
     const switchBtn = this.add.rectangle(600, 560, 200, 40, 0x334455)
-      .setStrokeStyle(1, 0x6688aa)
-      .setInteractive({ useHandCursor: true })
+      .setStrokeStyle(1, 0x6688aa).setInteractive({ useHandCursor: true })
     this.add.text(600, 560, 'Switch Character', { font: '14px monospace', color: '#ffffff' }).setOrigin(0.5)
     switchBtn.on('pointerover', () => switchBtn.setFillStyle(0x445566))
     switchBtn.on('pointerout',  () => switchBtn.setFillStyle(0x334455))
-    switchBtn.on('pointerdown', () => this.scene.start('CharacterSelect'))
+    switchBtn.on('pointerdown', () => { this.visualizer?.stop(); this.scene.start('CharacterSelect') })
 
     this.timerEvent = this.time.addEvent({
-      delay: 1000,
-      callback: this.tickElapsed,
-      callbackScope: this,
-      loop: true,
+      delay: 1000, callback: this.tickElapsed,
+      callbackScope: this, loop: true,
     })
   }
 
   private buildExpeditionPanel(run: ExpeditionRun): void {
     const cx = 140
+
     this.add.rectangle(cx, 310, 220, 260, 0x222222).setStrokeStyle(1, 0x444444)
+    this.add.text(cx, 188, 'Expedition', { font: '14px monospace', color: '#aaaaaa' }).setOrigin(0.5)
+    this.add.text(cx, 204, run.zone_name, { font: '13px monospace', color: '#ffffff' }).setOrigin(0.5)
 
-    this.add.text(cx, 192, 'Expedition', { font: '14px monospace', color: '#aaaaaa' }).setOrigin(0.5)
-    this.add.text(cx, 220, run.zone_name, { font: '16px monospace', color: '#ffffff' }).setOrigin(0.5)
+    this.visualizer = new CombatVisualizer(this, 32, 218)
+    this.visualizer.start(GameState.instance.character!, run.zone_def)
 
-    this.elapsedText = this.add.text(cx, 248, `Time: ${formatElapsed(run.elapsed_seconds)}`, {
-      font: '14px monospace',
-      color: '#cccccc',
+    this.elapsedText = this.add.text(cx, 395, `Time: ${formatElapsed(run.elapsed_seconds)}`, {
+      font: '13px monospace', color: '#cccccc',
     }).setOrigin(0.5)
 
-    this.cannotSurviveText = this.add.text(cx, 278, 'Cannot survive this zone!', {
-      font: '12px monospace',
-      color: '#ff8844',
+    this.cannotSurviveText = this.add.text(cx, 410, 'Cannot survive this zone!', {
+      font: '11px monospace', color: '#ff8844',
     }).setOrigin(0.5).setVisible(false)
 
-    this.collectResultText = this.add.text(cx, 302, '', {
-      font: '12px monospace',
-      color: '#88ff88',
+    this.collectResultText = this.add.text(cx, 410, '', {
+      font: '11px monospace', color: '#88ff88',
     }).setOrigin(0.5)
 
-    const collectBtn = this.add.rectangle(cx, 340, 140, 36, 0x225522)
-      .setStrokeStyle(1, 0x44aa44)
-      .setInteractive({ useHandCursor: true })
-    this.add.text(cx, 340, 'Collect', { font: '14px monospace', color: '#ffffff' }).setOrigin(0.5)
-
+    const collectBtn = this.add.rectangle(cx, 427, 140, 30, 0x225522)
+      .setStrokeStyle(1, 0x44aa44).setInteractive({ useHandCursor: true })
+    this.add.text(cx, 427, 'Collect', { font: '13px monospace', color: '#ffffff' }).setOrigin(0.5)
     collectBtn.on('pointerover', () => collectBtn.setFillStyle(0x336633))
     collectBtn.on('pointerout',  () => collectBtn.setFillStyle(0x225522))
     collectBtn.on('pointerdown', async () => {
@@ -123,6 +118,7 @@ export class HubScene extends Phaser.Scene {
           this.cannotSurviveText.setVisible(false)
           this.collectResultText.setText(`+${result.xp_gained} XP  +${result.gold_gained} G`)
           this.elapsedText.setText(`Time: ${formatElapsed(0)}`)
+          this.visualizer?.start(result.character, GameState.instance.expeditionRun!.zone_def)
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'error'
