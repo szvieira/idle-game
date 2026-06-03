@@ -210,8 +210,8 @@ func printRoomScreen(r dungeon.Room, idx, total int, c *character.Character) {
 		names[i] = e.Name
 	}
 	fmt.Printf("  Enemies: %s\n\n", strings.Join(names, ", "))
-	fmt.Printf("  [%s]  Lv.%d  HP: %s  MP: %d/%d\n",
-		c.Class, c.Level, hpBar(c.HP, c.MaxHP), c.Mana, c.MaxMana)
+	fmt.Printf("  [%s]  Lv.%d  HP: %s\n",
+		c.Class, c.Level, hpBar(c.HP, c.MaxHP))
 	fmt.Printf("  %s\n\n", hline(w))
 }
 
@@ -312,8 +312,8 @@ func main() {
 		bold, c.Class, reset)
 	fmt.Printf("  Lv.%d  HP:%d  ATK:%d  DEF:%d%%  CRIT:%d%%  CDR:%d%%\n",
 		c.Level, c.MaxHP, c.Attack, c.Defense, c.Critical, c.CDR)
-	fmt.Printf("  Special: %s%s%s  (CD:%d ticks  Mana cost:%d)\n\n",
-		yellow, c.SpecialName, reset, c.SpecialCD, c.SpecialManaCost)
+	fmt.Printf("  Special: %s%s%s  (CD:%d ticks)\n\n",
+		yellow, c.SpecialName, reset, c.SpecialCD)
 	wait(time.Second)
 
 	ds := &dungeon.DungeonStats{StartTime: time.Now()}

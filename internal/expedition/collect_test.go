@@ -18,10 +18,9 @@ func weakChar() *character.Character {
 	c := &character.Character{
 		Class: "Warrior", Level: 1,
 		HP: 5, MaxHP: 5,
-		Mana: 0, MaxMana: 0,
 		Attack: 1, Defense: 0, Critical: 0, CDR: 0,
 		XP: 0, XPToNext: 100,
-		SpecialMult: 2.0, SpecialManaCost: 999, SpecialCD: 5, SpecialName: "Strike",
+		SpecialMult: 2.0, SpecialCD: 5, SpecialName: "Strike",
 	}
 	return c
 }
