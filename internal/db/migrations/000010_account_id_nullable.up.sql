@@ -1,0 +1,1 @@
+ALTER TABLE characters ALTER COLUMN account_id DROP NOT NULL;

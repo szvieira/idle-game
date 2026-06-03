@@ -1,0 +1,20 @@
+CREATE TABLE characters (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id  UUID        NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name        TEXT        NOT NULL,
+    class       TEXT        NOT NULL CHECK (class IN ('Warrior', 'Mage', 'Priest')),
+    level       INT         NOT NULL DEFAULT 1,
+    xp          INT         NOT NULL DEFAULT 0,
+    xp_to_next  INT         NOT NULL DEFAULT 100,
+    gold        INT         NOT NULL DEFAULT 0,
+    hp          INT         NOT NULL,
+    max_hp      INT         NOT NULL,
+    mana        INT         NOT NULL,
+    max_mana    INT         NOT NULL,
+    attack      INT         NOT NULL,
+    defense     INT         NOT NULL,
+    critical    INT         NOT NULL,
+    cdr         INT         NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
