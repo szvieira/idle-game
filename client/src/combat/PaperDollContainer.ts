@@ -55,6 +55,11 @@ export class PaperDollContainer {
     return this
   }
 
+  setVisible(visible: boolean): this {
+    this.container.setVisible(visible)
+    return this
+  }
+
   get x(): number { return this.container.x }
   get y(): number { return this.container.y }
 

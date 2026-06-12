@@ -100,3 +100,18 @@ export interface CompleteExpeditionResult {
   character: Character
   items_added: InventoryItem[]
 }
+
+export interface SkillNode {
+  id: string
+  name: string
+  type: 'active' | 'passive'
+  requires_id: string | null
+  col: number
+  row: number
+}
+
+export interface CharacterSkills {
+  unlocked: string[]
+  equipped_skill: string
+  available_points: number
+}
