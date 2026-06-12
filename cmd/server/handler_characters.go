@@ -112,7 +112,32 @@ func (s *server) loadEquipmentBonuses(ctx context.Context, charID string) ([]cha
 	return bonuses, rows.Err()
 }
 
-// loadCharEffective loads base char stats and applies all equipped item bonuses.
+// loadPassiveSkillEffects fetches and unmarshals effects of all unlocked passive nodes.
+func (s *server) loadPassiveSkillEffects(ctx context.Context, charID string) ([]character.SkillEffect, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT sn.effect
+		FROM character_skill_nodes csn
+		JOIN skill_nodes sn ON sn.id = csn.node_id
+		WHERE csn.character_id = $1 AND sn.type = 'passive'
+	`, charID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var effects []character.SkillEffect
+	for rows.Next() {
+		var e character.SkillEffect
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		effects = append(effects, e)
+	}
+	return effects, rows.Err()
+}
+
+// loadCharEffective loads base char stats and applies equipped item bonuses
+// plus passive skill effects.
 func (s *server) loadCharEffective(ctx context.Context, id string) (*serverChar, error) {
 	sc, err := s.loadChar(ctx, id)
 	if err != nil {
@@ -123,6 +148,13 @@ func (s *server) loadCharEffective(ctx context.Context, id string) (*serverChar,
 		return nil, err
 	}
 	character.ApplyEquipment(sc.c, bonuses)
+
+	effects, err := s.loadPassiveSkillEffects(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	character.ApplyPassiveSkills(sc.c, effects)
+
 	return sc, nil
 }
 
