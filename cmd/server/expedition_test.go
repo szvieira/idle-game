@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"game/internal/db"
+	"game/internal/presence"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -32,7 +33,7 @@ func TestMain(m *testing.M) {
 	if err := db.Migrate(ctx, pool); err != nil {
 		panic("run migrations: " + err.Error())
 	}
-	testServer = &server{pool: pool}
+	testServer = &server{pool: pool, hub: presence.NewHub()}
 	code := m.Run()
 	pool.Close()
 	os.Exit(code)
@@ -64,7 +65,9 @@ func createChar(t *testing.T, class string) string {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create character: %d %s", w.Code, w.Body.String())
 	}
-	var resp struct{ ID string `json:"id"` }
+	var resp struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &resp)
 	t.Cleanup(func() { cleanupChar(t, resp.ID) })
 	return resp.ID
@@ -87,7 +90,9 @@ func TestExpedition_StartIdempotent(t *testing.T) {
 	if w1.Code != http.StatusCreated {
 		t.Fatalf("start expedition: %d %s", w1.Code, w1.Body.String())
 	}
-	var r1 struct{ ID string `json:"id"` }
+	var r1 struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w1, &r1)
 
 	w2 := do(t, "POST", "/expedition-runs", map[string]string{
@@ -96,7 +101,9 @@ func TestExpedition_StartIdempotent(t *testing.T) {
 	if w2.Code != http.StatusCreated {
 		t.Fatalf("second start: %d %s", w2.Code, w2.Body.String())
 	}
-	var r2 struct{ ID string `json:"id"` }
+	var r2 struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w2, &r2)
 
 	if r1.ID != r2.ID {
@@ -126,7 +133,9 @@ func TestExpedition_CollectRewards(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	// Force-set last_activity_at to 120 seconds ago so collect returns rewards
@@ -182,7 +191,9 @@ func TestExpedition_PauseTimeNotCounted(t *testing.T) {
 	w := do(t, "POST", "/expedition-runs", map[string]string{
 		"character_id": charID, "zone_id": "forest",
 	})
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	// Backdate start by 120s so active time = 120s
@@ -228,7 +239,9 @@ func TestExpedition_PauseOnPaused_NoOp(t *testing.T) {
 	w := do(t, "POST", "/expedition-runs", map[string]string{
 		"character_id": charID, "zone_id": "forest",
 	})
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	do(t, "POST", "/expedition-runs/"+run.ID+"/pause", nil)
@@ -244,7 +257,9 @@ func TestExpedition_CollectOnPaused_Returns400(t *testing.T) {
 	w := do(t, "POST", "/expedition-runs", map[string]string{
 		"character_id": charID, "zone_id": "forest",
 	})
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	do(t, "POST", "/expedition-runs/"+run.ID+"/pause", nil)
@@ -262,7 +277,9 @@ func TestExpedition_ZoneSwitch_Atomic(t *testing.T) {
 	w := do(t, "POST", "/expedition-runs", map[string]string{
 		"character_id": charID, "zone_id": "forest",
 	})
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	// Backdate by 120s so there are rewards to collect
@@ -316,7 +333,9 @@ func TestExpedition_ZoneSwitch_LockedZone(t *testing.T) {
 	w := do(t, "POST", "/expedition-runs", map[string]string{
 		"character_id": charID, "zone_id": "forest",
 	})
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	ws := do(t, "POST", "/expedition-runs/"+run.ID+"/zone",
@@ -331,7 +350,9 @@ func TestExpedition_ZoneSwitch_SameZone_NoOp(t *testing.T) {
 	w := do(t, "POST", "/expedition-runs", map[string]string{
 		"character_id": charID, "zone_id": "forest",
 	})
-	var run struct{ ID string `json:"id"` }
+	var run struct {
+		ID string `json:"id"`
+	}
 	mustJSON(t, w, &run)
 
 	ws := do(t, "POST", "/expedition-runs/"+run.ID+"/zone",

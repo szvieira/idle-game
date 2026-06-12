@@ -1,8 +1,10 @@
 import Phaser from 'phaser'
 import { GameState } from '../state/GameState'
 import { PaperDollContainer } from '../combat/PaperDollContainer'
+import { PresenceSocket } from '../net/PresenceSocket'
 import { W, H, FONT } from './BaseCombat'
 import type { EquipmentSlot } from '../types/api'
+import type { PlayerSnap } from '../net/PresenceSocket'
 
 const LOBBY_ARENA = { x1: 60, y1: 335, x2: 900, y2: 520 }
 
@@ -18,6 +20,8 @@ export class LobbyScene extends Phaser.Scene {
   private moveTo: { x: number; y: number } | null = null
   private pois: POI[] = []
   private locked = false
+  private presence: PresenceSocket | null = null
+  private otherPlayers: Map<string, { sprite: Phaser.GameObjects.Image; label: Phaser.GameObjects.Text }> = new Map()
 
   constructor() { super({ key: 'Lobby' }) }
 
@@ -38,6 +42,8 @@ export class LobbyScene extends Phaser.Scene {
     this.buildPOIs()
     this.buildTopUI()
     this.setupInput()
+    this.setupPresence()
+    this.events.once('shutdown', () => this.shutdownPresence())
   }
 
   private buildCamp(): void {
@@ -137,6 +143,61 @@ export class LobbyScene extends Phaser.Scene {
         onUpdate: () => r.setStrokeStyle(3, 0x5ec05e, Math.max(r.alpha, 0)),
         onComplete: () => r.destroy() })
     })
+  }
+
+  private setupPresence(): void {
+    const char = GameState.instance.character
+    if (!char) return
+
+    this.presence = new PresenceSocket(
+      char.id,
+      (players) => this.onPresenceUpdate(players),
+      (id) => this.onPresenceLeave(id),
+    )
+    this.presence.connect()
+    this.presence.startBroadcast(() => ({ x: this.hero.x, y: this.hero.y }))
+  }
+
+  private shutdownPresence(): void {
+    this.presence?.disconnect()
+    this.presence = null
+    for (const entry of this.otherPlayers.values()) {
+      entry.sprite.destroy()
+      entry.label.destroy()
+    }
+    this.otherPlayers.clear()
+  }
+
+  private onPresenceUpdate(players: PlayerSnap[]): void {
+    for (const player of players) {
+      if (player.id === GameState.instance.character?.id) continue
+
+      let entry = this.otherPlayers.get(player.id)
+      if (!entry) {
+        const sprite = this.add.image(player.x, player.y, 'spr_hero').setDepth(3).setTint(0x88aaff)
+        const label = this.add.text(player.x, player.y - 40, player.name, {
+          fontFamily: FONT,
+          fontSize: '9px',
+          color: '#88aaff',
+          stroke: '#000',
+          strokeThickness: 3,
+        }).setOrigin(0.5).setDepth(4)
+        entry = { sprite, label }
+        this.otherPlayers.set(player.id, entry)
+      }
+
+      this.tweens.add({ targets: entry.sprite, x: player.x, y: player.y, duration: 150, ease: 'Linear' })
+      entry.label.setPosition(player.x, player.y - 40)
+    }
+  }
+
+  private onPresenceLeave(id: string): void {
+    const entry = this.otherPlayers.get(id)
+    if (!entry) return
+
+    entry.sprite.destroy()
+    entry.label.destroy()
+    this.otherPlayers.delete(id)
   }
 
   update(_time: number, delta: number): void {

@@ -36,19 +36,16 @@ Branch: `feat/expedition-combat-visualization`
 - `main.ts` — 960×540, all scenes; HubScene deleted; 'Hub' refs → 'Lobby'
 - All client tests pass (39), go build OK
 
-### Slice 5 — Presence (PARTIAL)
+### Slice 5 — Presence ✓
 - ✓ `nhooyr.io/websocket` dep added (go.mod/go.sum committed)
 - ✓ `internal/presence/hub.go` + `client.go` committed
-- ✗ REMAINING — see below
+- `cmd/server/handler_presence.go` — GET `/ws/presence?char_id=` validates character, upgrades websocket, registers client
+- `cmd/server/main.go` — server owns `presence.Hub`, route registered
+- `client/src/net/PresenceSocket.ts` — connect/send/update/leave/disconnect wrapper + tests
+- `client/src/scenes/LobbyScene.ts` — broadcasts hero position, renders other players with interpolation, cleans up on shutdown
+- Verification: `go test ./...`, `go build ./...`, `npm run typecheck`, `npm run test`, `npm run build`
 
 ## TODO (continue here)
-
-### Slice 5 remainder (plan: `2026-06-12-v6-slice5-presence.md`, Tasks 26-27)
-1. `cmd/server/handler_presence.go` — `handlePresence` (GET /ws/presence?char_id=). Plan has full code.
-2. `cmd/server/main.go` — add `hub *presence.Hub` to server struct, `presence.NewHub()` in main(), register route `GET /ws/presence`.
-3. `client/src/net/PresenceSocket.ts` — full code in plan.
-4. `client/src/scenes/LobbyScene.ts` — integrate PresenceSocket (connect in create, startBroadcast hero pos every 150ms, render other players as tinted `spr_hero` + name label, tween interpolation, shutdown disconnect). Plan has code.
-5. Commit.
 
 ### Slice 6 — Raids (plan: `2026-06-12-v6-slice6-raids.md`, Tasks 28-31, NOT started)
 1. `internal/raid/types.go` — message types
