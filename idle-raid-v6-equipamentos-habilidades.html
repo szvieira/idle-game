@@ -1,0 +1,1871 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Idle Raid — Protótipo v6 (Equipamentos + Habilidades)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#0b0a12; overflow:hidden; touch-action:manipulation; }
+  #game { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+  canvas { image-rendering: pixelated; }
+  #scanlines {
+    pointer-events:none; position:fixed; inset:0; z-index:10;
+    background: repeating-linear-gradient(to bottom,
+      rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.12) 3px);
+  }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="scanlines"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+<script>
+/* =========================================================================
+   IDLE RAID — protótipo v6
+   Novidades:
+   - ITENS COM STATS: banco de itens (Comum/Incomum/Raro/Épico), equipar e
+     desequipar pela ficha do personagem, stats efetivos somam equipamento
+   - PAPER DOLL VISUAL: equipamentos com camada visual própria (grades de
+     pixels sobrepostas ao corpo base e compostas numa única textura em
+     runtime) — trocar a arma/elmo/peito/botas muda o boneco em TODAS as
+     cenas sem redesenhar o sprite
+   - ÁRVORE DE HABILIDADES: aba "Habilidades" na ficha, com ramificações de
+     passivas (+ATK, +HP, +CRIT, +DEF) e uma NOVA SKILL ativa (Investida,
+     um dash perfurante) que pode ser equipada no lugar do Redemoinho
+   - Drop de equipamento Comum/Incomum na Expedição (Raro/Épico continuam
+     exclusivos da Masmorra)
+   - BOTÃO DE DEBUG (Configurações): +1 nível e concede todos os itens
+   ========================================================================= */
+
+const W = 960, H = 540;
+const PX = 5;
+const FONT = '"Press Start 2P", monospace';
+const ARENA = { x1: 50, y1: 215, x2: 910, y2: 500 };
+const SKILL_RADIUS = 150;
+
+/* ---------------------- ESTADO GLOBAL ----------------------------------- */
+const STATE = {
+  gold: 120, xp: 0, level: 1, kills: 0, uidSeq: 0,
+  items: [],   // instâncias: { uid, id (chave do ITEM_DB) }
+  equipped: { arma:null, elmo:null, peito:null, botas:null, anel:null, amuleto:null },
+  skills: { nodes: { redemoinho: true }, equipped: 'redemoinho' },
+  potions: { hp: 2, mp: 2 },
+  zone: 1, room: 1,
+  settings: { autoDefault: true, dmgNumbers: true },
+};
+const xpToNext = lv => Math.round(60 * Math.pow(lv, 1.35));
+const heroStats = lv => ({
+  hp:  Math.round(120 * (1 + 0.08 * (lv - 1))),
+  mp:  100,
+  atk: Math.round(11  * (1 + 0.10 * (lv - 1))),
+  def: Math.round(2 + (lv - 1) * 0.6),
+  crit: 0.15, critMult: 2.0, cdr: 0,
+  atkSpeed: 1.2, speed: 175,
+});
+
+function addItem(id) {
+  STATE.items.push({ uid: ++STATE.uidSeq, id });
+  return STATE.items[STATE.items.length - 1];
+}
+function findItem(uid) { return STATE.items.find(i => i.uid === uid); }
+
+/* stats finais = base do nível + passivas da árvore + equipamentos */
+function effectiveStats() {
+  const s = heroStats(STATE.level);
+  const n = STATE.skills.nodes;
+  if (n.forca_bruta) s.atk = Math.round(s.atk * 1.10);
+  if (n.furia)       s.crit += 0.05;
+  if (n.pele_ferro)  s.hp = Math.round(s.hp * 1.15);
+  if (n.vigor)       s.def += 4;
+  Object.values(STATE.equipped).forEach(uid => {
+    if (!uid) return;
+    const inst = findItem(uid);
+    if (!inst) return;
+    const st = ITEM_DB[inst.id].stats;
+    s.hp += st.hp || 0; s.atk += st.atk || 0; s.def += st.def || 0;
+    s.crit += st.crit || 0; s.cdr += st.cdr || 0;
+  });
+  s.cdr = Math.min(s.cdr, 0.5);
+  s.crit = Math.min(s.crit, 0.8);
+  return s;
+}
+function heroPower() {
+  const s = effectiveStats();
+  return Math.round(s.atk * 4 + s.hp * 0.5 + s.def * 3 +
+    s.crit * 200 + s.cdr * 200);
+}
+
+/* ---------------------- HABILIDADES ------------------------------------- */
+const SKILLS = {
+  redemoinho: { nome:'REDEMOINHO', mult:2.2, cd:6.0, mpCost:35, tipo:'aoe',
+    desc:'gira e causa dano em área ao redor de si' },
+  investida:  { nome:'INVESTIDA',  mult:3.4, cd:5.0, mpCost:25, tipo:'dash',
+    desc:'avança até o alvo e o perfura (dano alto em alvo único)' },
+};
+
+/* árvore: ramo esquerdo ofensivo culmina na nova ativa; direito defensivo */
+const SKILL_TREE = [
+  { id:'redemoinho',  nome:'Redemoinho',   tipo:'ativa',   col:0,  row:0, req:null,
+    desc:'AoE ao redor de si (inicial)' },
+  { id:'forca_bruta', nome:'Força Bruta',  tipo:'passiva', col:-1, row:1, req:'redemoinho',
+    desc:'+10% ATAQUE' },
+  { id:'furia',       nome:'Fúria',        tipo:'passiva', col:-1, row:2, req:'forca_bruta',
+    desc:'+5% CRÍTICO' },
+  { id:'investida',   nome:'Investida',    tipo:'ativa',   col:-1, row:3, req:'furia',
+    desc:'NOVA SKILL: dash 3.4x no alvo' },
+  { id:'pele_ferro',  nome:'Pele de Ferro',tipo:'passiva', col:1,  row:1, req:'redemoinho',
+    desc:'+15% HP' },
+  { id:'vigor',       nome:'Vigor',        tipo:'passiva', col:1,  row:2, req:'pele_ferro',
+    desc:'+4 DEFESA' },
+];
+function skillPointsSpent() {
+  return Object.keys(STATE.skills.nodes).length - 1; // redemoinho é grátis
+}
+function skillPointsAvailable() {
+  return Math.max(0, (STATE.level - 1) - skillPointsSpent());
+}
+
+const MP_REGEN = 7;
+const SHOP = [
+  { id:'hp', nome:'Poção de HP',   desc:'restaura 50% do HP',  preco: 50 },
+  { id:'mp', nome:'Poção de Mana', desc:'restaura 60 de Mana', preco: 40 },
+];
+const EQUIP_SLOTS = [
+  { key:'arma',    label:'ARMA' },   { key:'elmo',    label:'ELMO' },
+  { key:'peito',   label:'PEITO' },  { key:'botas',   label:'BOTAS' },
+  { key:'anel',    label:'ANEL' },   { key:'amuleto', label:'AMULETO' },
+];
+
+/* ---------------------- BANCO DE ITENS ----------------------------------- */
+const RARITY_COLOR = { Comum:'#b8c0cc', Incomum:'#5ec05e', Raro:'#4da3ff', Epico:'#c45aff' };
+
+/* fonte: 'exp' = dropa na expedição | 'dg' = exclusivo da masmorra
+   visual: id da camada de paper doll (anel/amuleto não têm visual)        */
+const ITEM_DB = {
+  espada_ferro:   { nome:'Espada de Ferro',   slot:'arma',   raridade:'Comum',
+    stats:{atk:4},            visual:'v_espada_ferro',   fonte:'exp' },
+  peitoral_couro: { nome:'Peitoral de Couro', slot:'peito',  raridade:'Comum',
+    stats:{hp:14, def:1},     visual:'v_peito_couro',    fonte:'exp' },
+  botas_couro:    { nome:'Botas de Couro',    slot:'botas',  raridade:'Comum',
+    stats:{hp:8},             visual:'v_botas_couro',    fonte:'exp' },
+  anel_cobre:     { nome:'Anel de Cobre',     slot:'anel',   raridade:'Comum',
+    stats:{atk:2},                                       fonte:'exp' },
+  espada_soldado: { nome:'Espada do Soldado', slot:'arma',   raridade:'Incomum',
+    stats:{atk:8, crit:0.02}, visual:'v_espada_soldado', fonte:'exp' },
+  elmo_batedor:   { nome:'Elmo do Batedor',   slot:'elmo',   raridade:'Incomum',
+    stats:{hp:18, def:2},     visual:'v_elmo_batedor',   fonte:'exp' },
+  amuleto_quartzo:{ nome:'Amuleto de Quartzo',slot:'amuleto',raridade:'Incomum',
+    stats:{cdr:0.05},                                    fonte:'exp' },
+  lamina_cripta:  { nome:'Lâmina da Cripta',  slot:'arma',   raridade:'Raro',
+    stats:{atk:14, crit:0.05}, visual:'v_lamina_cripta', fonte:'dg' },
+  elmo_vigia:     { nome:'Elmo do Vigia',     slot:'elmo',   raridade:'Raro',
+    stats:{hp:30, def:4},     visual:'v_elmo_vigia',     fonte:'dg' },
+  anel_sepulcral: { nome:'Anel Sepulcral',    slot:'anel',   raridade:'Raro',
+    stats:{atk:6, cdr:0.05},                             fonte:'dg' },
+  botas_silentes: { nome:'Botas Silentes',    slot:'botas',  raridade:'Raro',
+    stats:{hp:20, crit:0.04}, visual:'v_botas_silentes', fonte:'dg' },
+  manto_senhor:   { nome:'Manto do Senhor da Cripta', slot:'peito', raridade:'Epico',
+    stats:{hp:60, def:8},     visual:'v_manto_senhor',   fonte:'dg' },
+  machado_profano:{ nome:'Machado Profano',   slot:'arma',   raridade:'Epico',
+    stats:{atk:24, crit:0.08}, visual:'v_machado_profano', fonte:'dg' },
+  coroa_ossos:    { nome:'Coroa dos Ossos',   slot:'elmo',   raridade:'Epico',
+    stats:{hp:40, cdr:0.10},  visual:'v_coroa_ossos',    fonte:'dg' },
+};
+function itemsByPool(fonte, raridades) {
+  return Object.keys(ITEM_DB).filter(id =>
+    ITEM_DB[id].fonte === fonte && raridades.includes(ITEM_DB[id].raridade));
+}
+function statLine(st) {
+  const p = [];
+  if (st.atk) p.push('+' + st.atk + ' ATK');
+  if (st.hp)  p.push('+' + st.hp + ' HP');
+  if (st.def) p.push('+' + st.def + ' DEF');
+  if (st.crit) p.push('+' + Math.round(st.crit*100) + '% CRIT');
+  if (st.cdr)  p.push('+' + Math.round(st.cdr*100) + '% CDR');
+  return p.join('  ');
+}
+
+/* ---------------------- PIXEL ART (base + camadas) ----------------------- */
+/* O herói base e as camadas de equipamento usam a MESMA grade 12x14.
+   Equipar = compor as camadas por cima do corpo numa única textura.        */
+const SPRITES = {
+  hero: {
+    pal:{ R:'#d04848',H:'#9aa8bd',D:'#5b6678',S:'#e8b890',E:'#1c2030',
+          A:'#7d8ca3',B:'#3e4a5e',L:'#4a3b2a',G:'#c8b04a' },
+    rows:[
+      '....RR......','...HHHH.....','..HHHHHH....','..HSSSSH....',
+      '..HSESES....','...SSSS.....','..AAAAAA....','.AAAAAAAA...',
+      '.A.AAAA.A...','.B.AAAA.B...','...AAAA.....','...LLLL.....',
+      '..LL..LL....','..BB..BB....',
+    ]
+  },
+  slime: {
+    pal:{ G:'#5ec05e',g:'#3f8f43',W:'#ffffff',B:'#1c2030' },
+    rows:[
+      '............','...GGGGG....','..GGGGGGG...','.GGWGGGWGG..',
+      '.GGBGGGBGG..','GGGGGGGGGGG.','GGGGGgGGGGG.','gGGGGGGGGGg.',
+      '.ggGGGGGgg..','..ggggggg...',
+    ]
+  },
+  bat: {
+    pal:{ P:'#8c5fc0',p:'#5d3f86',W:'#ffd34d',B:'#1c2030',F:'#e8e8e8' },
+    rows:[
+      '.P..........P.','.PP........PP.','.PPP.pppp.PPP.','.PPPpppppPPPP.',
+      '..PPpWppWpPP..','...ppBppBpp...','....pppppp....','....pF..Fp....',
+      '.....p..p.....',
+    ]
+  },
+  skeleton: {
+    pal:{ W:'#e6e2d0',w:'#b8b29a',B:'#1c2030',R:'#c03a3a' },
+    rows:[
+      '...WWWW.....','..WWWWWW....','..WBWWBW....','..WWWWWW....',
+      '...WwwW.....','....WW......','..WWWWWW..R.','.W.WWWW.W.R.',
+      'w..WWWW..wR.','...WwwW...R.','...W..W.....','...W..W.....',
+      '..WW..WW....',
+    ]
+  },
+  boss: {
+    pal:{ D:'#7a2030',d:'#561522',H:'#e6e2d0',Y:'#ffd34d',R:'#ff5a4d',B:'#1c2030' },
+    rows:[
+      '.H..........H.','.HH........HH.','..DDDDDDDDDD..','.DDDDDDDDDDDD.',
+      '.DDYDDDDDDYDD.','.DDDDDDDDDDDD.','..DdRRRRRRdD..','..DDDDDDDDDD..',
+      '.DDDDDDDDDDDD.','DDDDDDDDDDDDDD','DDdDDDDDDDDdDD','...DDDDDDDD...',
+      '...DDD..DDD...','..DDD....DDD..',
+    ]
+  },
+};
+SPRITES.head = { pal: SPRITES.hero.pal, rows: SPRITES.hero.rows.slice(0, 6) };
+
+/* camadas de paper doll (12x14, alinhadas ao herói) */
+const OVERLAYS = {
+  /* ---- armas (lâmina na mão direita, coluna 10) ---- */
+  v_espada_ferro: {
+    pal:{ B:'#c8ccd4', G:'#8a6a3a', H:'#5a3a22' },
+    rows:[
+      '............','............','..........B.','..........B.',
+      '..........B.','..........B.','..........B.','..........B.',
+      '.........GBG','..........H.','............','............',
+      '............','............',
+    ]
+  },
+  v_espada_soldado: {
+    pal:{ B:'#d4d9e0', G:'#5ec05e', H:'#5a3a22' },
+    rows:[
+      '............','............','..........B.','..........B.',
+      '..........B.','..........B.','..........B.','..........B.',
+      '.........GBG','..........H.','............','............',
+      '............','............',
+    ]
+  },
+  v_lamina_cripta: {
+    pal:{ B:'#b06aff', W:'#e8d0ff', G:'#3a3144', H:'#241c2e' },
+    rows:[
+      '............','............','..........W.','..........B.',
+      '..........B.','..........B.','..........B.','..........B.',
+      '.........GBG','..........H.','............','............',
+      '............','............',
+    ]
+  },
+  v_machado_profano: {
+    pal:{ R:'#a03a3a', r:'#6e2020', B:'#3a3144', H:'#241c2e' },
+    rows:[
+      '............','........RR..','.......RRRB.','........rRB.',
+      '..........B.','..........B.','..........B.','..........B.',
+      '..........B.','..........H.','............','............',
+      '............','............',
+    ]
+  },
+  /* ---- elmos (cobrem cabeça e o penacho) ---- */
+  v_elmo_batedor: {
+    pal:{ F:'#7a8a5a', f:'#5a6a42' },
+    rows:[
+      '....FF......','...FFFF.....','..FFFFFF....','..F....F....',
+      '............','............','............','............',
+      '............','............','............','............',
+      '............','............',
+    ]
+  },
+  v_elmo_vigia: {
+    pal:{ F:'#4d7ea8', f:'#35597a' },
+    rows:[
+      '....FF......','...FFFF.....','..FFFFFF....','..Ff..fF....',
+      '............','............','............','............',
+      '............','............','............','............',
+      '............','............',
+    ]
+  },
+  v_coroa_ossos: {
+    pal:{ W:'#e6e2d0', Y:'#ffd34d' },
+    rows:[
+      '..W.YY.W....','..WWWWWW....','............','............',
+      '............','............','............','............',
+      '............','............','............','............',
+      '............','............',
+    ]
+  },
+  /* ---- peitorais (recolorem o torso) ---- */
+  v_peito_couro: {
+    pal:{ C:'#7a5a36', c:'#5a4226' },
+    rows:[
+      '............','............','............','............',
+      '............','............','..CCCCCC....','.CCCcCCCC...',
+      '.C.CCCC.C...','...CCCC.....','...CcCC.....','............',
+      '............','............',
+    ]
+  },
+  v_manto_senhor: {
+    pal:{ D:'#7a2030', d:'#561522', G:'#ffd34d' },
+    rows:[
+      '............','............','............','............',
+      '............','............','.DDDDDDDD...','.DDDGGDDD...',
+      '.D.DDDD.D...','...DDDD.....','...DdDD.....','............',
+      '............','............',
+    ]
+  },
+  /* ---- botas ---- */
+  v_botas_couro: {
+    pal:{ C:'#7a5a36' },
+    rows:[
+      '............','............','............','............',
+      '............','............','............','............',
+      '............','............','............','............',
+      '............','..CC..CC....',
+    ]
+  },
+  v_botas_silentes: {
+    pal:{ P:'#5d3f86', p:'#3e2a5c' },
+    rows:[
+      '............','............','............','............',
+      '............','............','............','............',
+      '............','............','............','............',
+      '..PP..PP....','..pp..pp....',
+    ]
+  },
+};
+
+function drawGrid(ctx, def) {
+  for (let y = 0; y < def.rows.length; y++) {
+    for (let x = 0; x < def.rows[y].length; x++) {
+      const c = def.rows[y][x];
+      if (!c || c === '.') continue;
+      ctx.fillStyle = def.pal[c] || '#ff00ff';
+      ctx.fillRect(x * PX, y * PX, PX, PX);
+    }
+  }
+}
+
+function bakeTextures(scene) {
+  Object.keys(SPRITES).forEach(key => {
+    if (scene.textures.exists('tex_' + key)) return;
+    const def = SPRITES[key];
+    const canvas = scene.textures.createCanvas('tex_' + key,
+      def.rows[0].length * PX, def.rows.length * PX);
+    drawGrid(canvas.getContext(), def);
+    canvas.refresh();
+  });
+  refreshDoll(scene);
+}
+
+/* compõe corpo base + camadas equipadas numa única textura 'tex_doll';
+   como a textura é global, todas as cenas/imagens atualizam juntas */
+function refreshDoll(scene) {
+  const w = 12 * PX, h = 14 * PX;
+  const tex = scene.textures.exists('tex_doll')
+    ? scene.textures.get('tex_doll')
+    : scene.textures.createCanvas('tex_doll', w, h);
+  const ctx = tex.getContext();
+  ctx.clearRect(0, 0, w, h);
+  drawGrid(ctx, SPRITES.hero);
+  ['peito', 'botas', 'elmo', 'arma'].forEach(slot => { // ordem de pintura
+    const uid = STATE.equipped[slot];
+    const inst = uid && findItem(uid);
+    const db = inst && ITEM_DB[inst.id];
+    if (db && db.visual && OVERLAYS[db.visual]) drawGrid(ctx, OVERLAYS[db.visual]);
+  });
+  tex.refresh();
+}
+
+/* ---------------------- INIMIGOS / ZONAS -------------------------------- */
+const ENEMY_TYPES = [
+  { key:'slime',    nome:'Slime',    hp:30, atk:4, atkSpeed:2.6, gold:3,
+    speed: 55,  aggro: 150, range: 52 },
+  { key:'bat',      nome:'Morcego',  hp:22, atk:6, atkSpeed:1.8, gold:4,
+    speed: 115, aggro: 220, range: 50 },
+  { key:'skeleton', nome:'Esqueleto',hp:45, atk:9, atkSpeed:3.2, gold:7,
+    speed: 75,  aggro: 180, range: 56 },
+];
+const ZONE_NAMES = ['Floresta Sombria','Cavernas de Gelo','Ruínas Ígneas','Abismo'];
+const ZONE_TINTS = [0x1a2a1e, 0x16222e, 0x2a1a18, 0x1c1426];
+
+function fontStyle(size, color = '#e8e2d0') {
+  return { fontFamily: FONT, fontSize: size + 'px', color,
+           stroke: '#000', strokeThickness: 4 };
+}
+const dist = (a, b) => Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y);
+
+/* =========================================================================
+   BASE DE COMBATE — arena com movimento livre
+   ========================================================================= */
+class BaseCombat extends Phaser.Scene {
+  font(size, color) { return fontStyle(size, color); }
+
+  buildArena(tint) {
+    this.bgTint = this.add.rectangle(W/2, H/2, W, H, tint).setDepth(-10);
+    const g = this.add.graphics().setDepth(-6);
+    g.fillStyle(0x000000, 0.25);
+    for (let i = 0; i < 3; i++) g.fillRect(0, i * 70, W, 28);
+    g.fillStyle(0x141019, 1);
+    g.fillRect(0, ARENA.y1 - 25, W, H - ARENA.y1 + 25);
+    g.fillStyle(0x1b1524, 1);
+    for (let ty = ARENA.y1 - 10; ty < H; ty += 44)
+      for (let tx = (ty % 88 === 0 ? 0 : 44); tx < W; tx += 88)
+        g.fillRect(tx, ty, 42, 42);
+    g.fillStyle(0x241c2e, 1); g.fillRect(0, ARENA.y1 - 28, W, 8);
+    for (let i = 0; i < 8; i++) {
+      this.add.rectangle(
+        Phaser.Math.Between(ARENA.x1, ARENA.x2),
+        Phaser.Math.Between(ARENA.y1, ARENA.y2),
+        Phaser.Math.Between(8, 16), 8, 0x2a2235).setDepth(-4);
+    }
+    [120, 840].forEach(x => {
+      this.add.rectangle(x, 158, 8, 60, 0x4a3b2a).setDepth(-3);
+      const flame = this.add.rectangle(x, 120, 14, 16, 0xffa726).setDepth(-3);
+      this.tweens.add({ targets: flame, scaleY: 1.4, alpha: 0.7,
+        duration: 260, yoyo: true, repeat: -1 });
+    });
+  }
+
+  buildHero() {
+    const s = effectiveStats();
+    this.skill = SKILLS[STATE.skills.equipped];
+    this.hero = {
+      maxHp: s.hp, hp: s.hp, maxMp: s.mp, mp: s.mp,
+      atk: s.atk, def: s.def, atkSpeed: s.atkSpeed,
+      crit: s.crit, critMult: s.critMult, cdr: s.cdr, speed: s.speed,
+      nextAtk: 0, skillReady: 0, castLock: 0,
+      x: 130, y: 360,
+      sprite: this.add.image(130, 360, 'tex_doll'),
+      shadow: this.add.ellipse(130, 392, 50, 12, 0x000000, 0.35).setDepth(1),
+    };
+    this.hero.hpBar = this.add.graphics().setDepth(8);
+    this.moveTo = null;
+  }
+
+  setupInput() {
+    this.input.on('pointerdown', (pointer, over) => {
+      if (over.length || this.busy || this.menuOpen) return;
+      if (pointer.worldY < ARENA.y1 - 30) return;
+      this.moveTo = {
+        x: Phaser.Math.Clamp(pointer.worldX, ARENA.x1, ARENA.x2),
+        y: Phaser.Math.Clamp(pointer.worldY, ARENA.y1, ARENA.y2),
+      };
+      this.clickMarker(this.moveTo.x, this.moveTo.y);
+    });
+  }
+
+  clickMarker(x, y) {
+    const r = this.add.circle(x, y, 4).setStrokeStyle(3, 0x5ec05e, 1).setDepth(1);
+    this.tweens.add({ targets: r, radius: 22, alpha: 0, duration: 350, ease: 'Quad.out',
+      onUpdate: () => r.setStrokeStyle(3, 0x5ec05e, Math.max(r.alpha, 0)),
+      onComplete: () => r.destroy() });
+  }
+
+  skillCdMs() { return this.skill.cd * 1000 * (1 - this.hero.cdr); }
+
+  buildCoreHUD() {
+    this.txtGold  = this.add.text(W-16, 14, '', this.font(11,'#ffd34d')).setOrigin(1,0).setDepth(20);
+    this.txtLevel = this.add.text(W-16, 38, '', this.font(9,'#9aa8bd')).setOrigin(1,0).setDepth(20);
+
+    this.txtHeroName = this.add.text(20, H-92, '', this.font(9)).setDepth(20);
+    this.heroHudHp = this.add.graphics().setDepth(20);
+    this.heroHudMp = this.add.graphics().setDepth(20);
+    this.heroHudXp = this.add.graphics().setDepth(20);
+
+    const bx = W-90, by = H-90;
+    this.skillBtn = this.add.container(bx, by).setDepth(20);
+    const ring = this.add.circle(0, 0, 44, 0x241c2e).setStrokeStyle(4, 0xffd34d);
+    const icon = this.add.text(0, -6,
+      this.skill.tipo === 'aoe' ? '\u269B' : '\u27A4', this.font(26,'#7fd4ff')).setOrigin(0.5);
+    const lbl  = this.add.text(0, 28, this.skill.nome, this.font(7)).setOrigin(0.5);
+    this.skillMpLbl = this.add.text(0, -34, this.skill.mpCost + ' MP',
+      this.font(7,'#7fd4ff')).setOrigin(0.5);
+    this.skillCdArc = this.add.graphics();
+    this.skillBtn.add([ring, icon, lbl, this.skillMpLbl, this.skillCdArc]);
+    this.skillBtn.setSize(96, 96).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.tryCastSkill(true));
+
+    this.autoSkill = STATE.settings.autoDefault;
+    this.autoTxt = this.add.text(bx, by+58,
+      'AUTO: ' + (this.autoSkill ? 'ON' : 'OFF'),
+      this.font(8, this.autoSkill ? '#5ec05e' : '#c03a3a'))
+      .setOrigin(0.5).setDepth(20).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => {
+        this.autoSkill = !this.autoSkill;
+        this.autoTxt.setText('AUTO: ' + (this.autoSkill ? 'ON':'OFF'))
+          .setColor(this.autoSkill ? '#5ec05e' : '#c03a3a');
+      });
+
+    this.txtBanner = this.add.text(W/2, 130, '', this.font(18,'#ffd34d'))
+      .setOrigin(0.5).setDepth(30).setAlpha(0);
+
+    this.add.text(W/2, 18, '\u2630 MENU', this.font(11))
+      .setOrigin(0.5, 0).setDepth(20).setPadding(10)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.openMenu());
+  }
+
+  refreshCoreHUD() {
+    this.txtGold.setText('OURO ' + STATE.gold);
+    this.txtLevel.setText('NV.' + STATE.level + '  XP ' + STATE.xp + '/' + xpToNext(STATE.level));
+    this.txtHeroName.setText('GUERREIRO  NV.' + STATE.level);
+  }
+
+  openMenu() {
+    if (this.menuOpen) return;
+    this.menuOpen = true;
+    const c = this.add.container(0, 0).setDepth(50);
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.72).setInteractive();
+    const panel = this.add.rectangle(W/2, H/2, 460, 380, 0x141019).setStrokeStyle(4, 0xffd34d);
+    const title = this.add.text(W/2, H/2 - 152, 'IDLE RAID', this.font(16,'#ffd34d')).setOrigin(0.5);
+    c.add([dim, panel, title]);
+    this.menuOptions().forEach((o, i) => {
+      const y = H/2 - 96 + i * 54;
+      const btn = this.add.rectangle(W/2, y, 380, 42, o.locked ? 0x241c2e : 0x2a3344)
+        .setStrokeStyle(2, o.locked ? 0x3a3144 : 0x7d8ca3);
+      const t = this.add.text(W/2, y, o.label,
+        this.font(9, o.locked ? '#5b6678' : (o.color || '#e8e2d0'))).setOrigin(0.5);
+      c.add([btn, t]);
+      if (!o.locked) {
+        btn.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
+          this.closeMenu(c); o.onPick();
+        });
+      }
+    });
+    const close = this.add.text(W/2, H/2 + 160, 'FECHAR', this.font(10,'#c03a3a'))
+      .setOrigin(0.5).setPadding(8).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.closeMenu(c));
+    c.add(close);
+    this.menuContainer = c;
+  }
+
+  closeMenu(c) { this.menuOpen = false; (c || this.menuContainer).destroy(); }
+
+  confirmDialog(msg, yesLabel, onYes) {
+    const c = this.add.container(0, 0).setDepth(60);
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.78).setInteractive();
+    const panel = this.add.rectangle(W/2, H/2, 560, 220, 0x141019).setStrokeStyle(4, 0xc03a3a);
+    const t = this.add.text(W/2, H/2 - 50, msg, this.font(10))
+      .setOrigin(0.5).setAlign('center').setWordWrapWidth(500);
+    const yes = this.add.text(W/2 - 110, H/2 + 50, yesLabel, this.font(10,'#c03a3a'))
+      .setOrigin(0.5).setPadding(10).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => { c.destroy(); onYes(); });
+    const no = this.add.text(W/2 + 110, H/2 + 50, 'CANCELAR', this.font(10,'#9aa8bd'))
+      .setOrigin(0.5).setPadding(10).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => c.destroy());
+    c.add([dim, panel, t, yes, no]);
+  }
+
+  banner(msg, color = '#ffd34d') {
+    this.txtBanner.setText(msg).setColor(color).setAlpha(0).setScale(0.6);
+    this.tweens.add({ targets: this.txtBanner, alpha: 1, scale: 1, duration: 250, ease: 'Back.out' });
+    this.tweens.add({ targets: this.txtBanner, alpha: 0, delay: 1300, duration: 350 });
+  }
+
+  drawBar(g, x, y, w, h, pct, fill) {
+    g.clear();
+    g.fillStyle(0x000000, 0.7); g.fillRect(x-2, y-2, w+4, h+4);
+    g.fillStyle(0x3a3144, 1);   g.fillRect(x, y, w, h);
+    g.fillStyle(fill, 1);       g.fillRect(x, y, Math.max(0, w*pct), h);
+  }
+
+  floatDamage(x, y, value, opts = {}) {
+    if (!STATE.settings.dmgNumbers && !opts.text) return;
+    const t = this.add.text(x, y, opts.text || String(value), {
+      fontFamily: FONT, fontSize: (opts.crit ? 18 : 12) + 'px',
+      color: opts.color || (opts.crit ? '#ffd34d' : '#ffffff'),
+      stroke: '#000', strokeThickness: 4
+    }).setOrigin(0.5).setDepth(15);
+    this.tweens.add({ targets: t, y: y-46, alpha: 0,
+      duration: 800, ease: 'Quad.out', onComplete: () => t.destroy() });
+  }
+
+  hitFlash(img) {
+    img.setTintFill(0xffffff);
+    this.time.delayedCall(80, () => { if (img.active) img.clearTint(); });
+  }
+
+  slashFx(x, y, crit) {
+    const g = this.add.graphics({ x, y }).setDepth(9);
+    g.lineStyle(crit ? 7 : 5, crit ? 0xffd34d : 0xe8e8ff, 1);
+    g.beginPath(); g.arc(0, 0, 30, -1.9, 0.9, false); g.strokePath();
+    g.setRotation(-0.5).setScale(0.6);
+    this.tweens.add({ targets: g, rotation: 0.7, scale: 1.15, alpha: 0,
+      duration: 220, ease: 'Quad.out', onComplete: () => g.destroy() });
+  }
+
+  jab(unit, towards) {
+    const s = unit.sprite;
+    const dx = Math.sign(towards.x - unit.x) * 10;
+    this.tweens.add({ targets: s, angle: dx > 0 ? 12 : -12,
+      duration: 70, yoyo: true, onComplete: () => s.setAngle(0) });
+  }
+
+  aliveEnemies() { return this.enemies ? this.enemies.filter(e => !e.dead) : []; }
+  nearestEnemy(p) {
+    let best = null, bd = Infinity;
+    this.aliveEnemies().forEach(e => {
+      const d = dist(p, e);
+      if (d < bd) { bd = d; best = e; }
+    });
+    return { enemy: best, d: bd };
+  }
+  enemiesWithin(p, r) { return this.aliveEnemies().filter(e => dist(p, e) <= r); }
+
+  moveToward(unit, tx, ty, speed, dt) {
+    const d = Phaser.Math.Distance.Between(unit.x, unit.y, tx, ty);
+    if (d < 2) return false;
+    const step = Math.min(speed * dt, d);
+    unit.x += (tx - unit.x) / d * step;
+    unit.y += (ty - unit.y) / d * step;
+    if (Math.abs(tx - unit.x) > 1) unit.sprite.setFlipX(tx < unit.x);
+    return true;
+  }
+
+  syncUnit(u) {
+    u.x = Phaser.Math.Clamp(u.x, ARENA.x1, ARENA.x2);
+    u.y = Phaser.Math.Clamp(u.y, ARENA.y1, ARENA.y2);
+    u.sprite.setPosition(u.x, u.y).setDepth(u.y / 100 + 2);
+    if (u.shadow) u.shadow.setPosition(u.x, u.y + 32 * (u.size || 1));
+  }
+
+  baseUpdate(time, delta) {
+    const h = this.hero, dt = delta / 1000;
+    h.mp = Math.min(h.maxMp, h.mp + MP_REGEN * dt);
+
+    if (!this.enemiesWithin(h, 240).length && h.hp < h.maxHp && !this.busy) {
+      h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.03 * dt);
+    }
+
+    this.drawBar(this.heroHudHp, 20, H-72, 240, 14, h.hp/h.maxHp, 0x5ec05e);
+    this.drawBar(this.heroHudMp, 20, H-52, 240, 10, h.mp/h.maxMp, 0x4da3ff);
+    this.drawBar(this.heroHudXp, 20, H-36, 240, 6, STATE.xp/xpToNext(STATE.level), 0xffd34d);
+    this.drawBar(h.hpBar, h.x-28, h.y-52, 56, 6, h.hp/h.maxHp, 0x5ec05e);
+    this.aliveEnemies().forEach(e => this.drawBar(e.hpBar,
+      e.x - e.barW/2, e.y - e.barOff, e.barW, 6, e.hp/e.maxHp, 0xc03a3a));
+
+    const cdLeft = Math.max(0, h.skillReady - time);
+    this.skillCdArc.clear();
+    if (cdLeft > 0) {
+      const frac = cdLeft / this.skillCdMs();
+      this.skillCdArc.fillStyle(0x000000, 0.6);
+      this.skillCdArc.slice(0, 0, 44, -Math.PI/2, -Math.PI/2 + frac*Math.PI*2, false);
+      this.skillCdArc.fillPath();
+    }
+    this.skillMpLbl.setColor(h.mp >= this.skill.mpCost ? '#7fd4ff' : '#c03a3a');
+
+    if (this.busy || (this.menuOpen && this.menuPausesCombat !== false)) return;
+
+    this.updateHero(time, dt);
+    this.updateEnemies(time, dt);
+    this.separateEnemies();
+    this.checkPortal();
+  }
+
+  updateHero(time, dt) {
+    const h = this.hero;
+    if (time < h.castLock) { this.syncUnit(h); return; }
+
+    if (this.moveTo) {
+      if (!this.moveToward(h, this.moveTo.x, this.moveTo.y, h.speed, dt)
+          || dist(h, this.moveTo) < 4) this.moveTo = null;
+    } else if (this.autoSkill) {
+      const { enemy, d } = this.nearestEnemy(h);
+      if (enemy) {
+        if (d > 64) this.moveToward(h, enemy.x, enemy.y, h.speed, dt);
+        else h.sprite.setFlipX(enemy.x < h.x);
+      } else if (this.portal) {
+        this.moveToward(h, this.portal.x, this.portal.y, h.speed, dt);
+      }
+    }
+    this.syncUnit(h);
+
+    const { enemy, d } = this.nearestEnemy(h);
+    if (enemy && d <= 72 && time >= h.nextAtk) {
+      h.nextAtk = time + h.atkSpeed * 1000;
+      const crit = Math.random() < h.crit;
+      const dmg = Math.round(h.atk * (0.85 + Math.random()*0.3) * (crit ? h.critMult : 1));
+      h.sprite.setFlipX(enemy.x < h.x);
+      this.jab(h, enemy);
+      this.slashFx(enemy.x, enemy.y, crit);
+      this.applyDamage(enemy, dmg, crit);
+    }
+
+    // auto-cast conforme o TIPO da skill equipada
+    if (this.autoSkill && time >= h.skillReady && h.mp >= this.skill.mpCost) {
+      if (this.skill.tipo === 'aoe'
+          && this.enemiesWithin(h, SKILL_RADIUS).length >= 2) {
+        this.tryCastSkill(false);
+      } else if (this.skill.tipo === 'dash') {
+        const { enemy, d } = this.nearestEnemy(h);
+        if (enemy && d > 110) this.tryCastSkill(false); // usa como gap closer
+      }
+    }
+  }
+
+  updateEnemies(time, dt) {
+    const h = this.hero;
+    this.aliveEnemies().forEach(e => {
+      const d = dist(e, h);
+      if (d <= e.aggro || e.angry) {
+        e.angry = true;
+        if (d > e.range) {
+          this.moveToward(e, h.x, h.y, e.speed, dt);
+        } else {
+          e.sprite.setFlipX(h.x < e.x);
+          if (time >= e.nextAtk) {
+            e.nextAtk = time + e.atkSpeed * 1000;
+            this.enemyStrike(e);
+          }
+        }
+      } else {
+        if (!e.wTarget || dist(e, e.wTarget) < 6 || time > e.wUntil) {
+          e.wTarget = {
+            x: Phaser.Math.Clamp(e.spawnX + Phaser.Math.Between(-50, 50), ARENA.x1, ARENA.x2),
+            y: Phaser.Math.Clamp(e.spawnY + Phaser.Math.Between(-35, 35), ARENA.y1, ARENA.y2),
+          };
+          e.wUntil = time + Phaser.Math.Between(1500, 3200);
+        }
+        this.moveToward(e, e.wTarget.x, e.wTarget.y, e.speed * 0.4, dt);
+      }
+      this.syncUnit(e);
+    });
+  }
+
+  separateEnemies() {
+    const list = this.aliveEnemies();
+    for (let i = 0; i < list.length; i++) for (let j = i+1; j < list.length; j++) {
+      const a = list[i], b = list[j], d = dist(a, b), min = 34;
+      if (d > 0 && d < min) {
+        const push = (min - d) / 2;
+        const nx = (b.x - a.x) / d, ny = (b.y - a.y) / d;
+        a.x -= nx * push; a.y -= ny * push;
+        b.x += nx * push; b.y += ny * push;
+      }
+    }
+  }
+
+  enemyStrike(e) {
+    const h = this.hero;
+    const heavy = e.boss && Math.random() < 0.25;
+    const raw = e.atk * (0.85 + Math.random()*0.3) * (heavy ? 1.6 : 1);
+    const dmg = Math.max(1, Math.round(raw - h.def));
+    if (heavy) {
+      e.sprite.setTintFill(0xff5a4d);
+      this.time.delayedCall(180, () => { if (e.sprite.active) e.sprite.clearTint(); });
+    }
+    this.jab(e, h);
+    h.hp = Math.max(0, h.hp - dmg);
+    this.hitFlash(h.sprite);
+    this.floatDamage(h.x, h.y - 56, dmg,
+      { color: heavy ? '#ff3b2f' : '#ff7a6e', crit: heavy });
+    this.cameras.main.shake(heavy ? 140 : 60, heavy ? 0.005 : 0.002);
+    if (h.hp <= 0) this.onHeroDown();
+  }
+
+  tryCastSkill(manual) {
+    const now = this.time.now, h = this.hero;
+    const noTarget = this.skill.tipo === 'dash' && !this.aliveEnemies().length;
+    const blocked = this.busy || now < h.skillReady || h.mp < this.skill.mpCost || noTarget;
+    if (blocked) {
+      if (manual) this.tweens.add({ targets: this.skillBtn, x: '+=4',
+        duration: 40, yoyo: true, repeat: 2 });
+      return;
+    }
+    h.mp -= this.skill.mpCost;
+    h.skillReady = now + this.skillCdMs();
+    if (this.skill.tipo === 'aoe') {
+      h.castLock = now + 650;
+      this.castRedemoinho();
+    } else {
+      h.castLock = now + 520;
+      this.castInvestida();
+    }
+  }
+
+  castRedemoinho() {
+    const h = this.hero;
+    this.banner(this.skill.nome + '!', '#7fd4ff');
+    this.tweens.add({ targets: h.sprite, angle: 720, duration: 520, ease: 'Cubic.out',
+      onComplete: () => h.sprite.setAngle(0) });
+    const ring = this.add.circle(h.x, h.y, 12).setDepth(9)
+      .setStrokeStyle(6, 0x7fd4ff, 1);
+    this.tweens.add({ targets: ring, radius: SKILL_RADIUS, alpha: 0, duration: 480,
+      ease: 'Quad.out',
+      onUpdate: () => ring.setStrokeStyle(6, 0x7fd4ff, Math.max(ring.alpha, 0)),
+      onComplete: () => ring.destroy() });
+    for (let i = 0; i < 14; i++) {
+      const a = (i/14) * Math.PI * 2;
+      const p = this.add.rectangle(h.x, h.y, 6, 6, 0x7fd4ff).setDepth(9);
+      this.tweens.add({ targets: p,
+        x: h.x + Math.cos(a) * SKILL_RADIUS, y: h.y + Math.sin(a) * SKILL_RADIUS * 0.7,
+        alpha: 0, duration: 460, ease: 'Quad.out', onComplete: () => p.destroy() });
+    }
+    this.cameras.main.shake(180, 0.006);
+    this.time.delayedCall(160, () => {
+      const dmg = Math.round(h.atk * this.skill.mult);
+      this.enemiesWithin(h, SKILL_RADIUS).forEach(e =>
+        this.applyDamage(e, dmg, false, '#7fd4ff'));
+    });
+  }
+
+  /* NOVA SKILL: dash até o alvo, dano alto no alvo + respingo nos vizinhos */
+  castInvestida() {
+    const h = this.hero;
+    const { enemy } = this.nearestEnemy(h);
+    if (!enemy) return;
+    this.banner(this.skill.nome + '!', '#ffd34d');
+    const d = dist(h, enemy);
+    const stop = Math.max(0, d - 44);
+    const tx = h.x + (enemy.x - h.x) / d * stop;
+    const ty = h.y + (enemy.y - h.y) / d * stop;
+    h.sprite.setFlipX(enemy.x < h.x);
+
+    // rastro fantasma durante o dash
+    const trail = this.time.addEvent({ delay: 35, repeat: 7, callback: () => {
+      const ghost = this.add.image(h.x, h.y, 'tex_doll')
+        .setFlipX(h.sprite.flipX).setAlpha(0.45).setTint(0xffd34d)
+        .setDepth(h.sprite.depth - 0.1);
+      this.tweens.add({ targets: ghost, alpha: 0, duration: 240,
+        onComplete: () => ghost.destroy() });
+    }});
+
+    this.tweens.add({
+      targets: h, x: tx, y: ty, duration: 220, ease: 'Cubic.in',
+      onUpdate: () => this.syncUnit(h),
+      onComplete: () => {
+        trail.remove();
+        this.syncUnit(h);
+        this.cameras.main.shake(150, 0.006);
+        const burst = this.add.circle(enemy.x, enemy.y, 10).setDepth(9)
+          .setStrokeStyle(6, 0xffd34d, 1);
+        this.tweens.add({ targets: burst, radius: 64, alpha: 0, duration: 300,
+          ease: 'Quad.out',
+          onUpdate: () => burst.setStrokeStyle(6, 0xffd34d, Math.max(burst.alpha, 0)),
+          onComplete: () => burst.destroy() });
+        this.slashFx(enemy.x, enemy.y, true);
+        const dmg = Math.round(h.atk * this.skill.mult);
+        this.applyDamage(enemy, dmg, true, '#ffd34d');
+        // respingo: 40% nos vizinhos do alvo
+        this.enemiesWithin(enemy, 70).forEach(e => {
+          if (e !== enemy) this.applyDamage(e, Math.round(dmg * 0.4), false, '#ffd34d');
+        });
+      }
+    });
+  }
+
+  applyDamage(e, dmg, crit, color) {
+    if (e.dead) return;
+    e.hp -= dmg;
+    e.angry = true;
+    this.hitFlash(e.sprite);
+    this.floatDamage(e.x, e.y - e.barOff - 4, dmg, { crit, color: color || undefined });
+    this.onEnemyDamaged(e);
+    if (e.hp <= 0) this.killEnemy(e);
+  }
+
+  onEnemyDamaged() {}
+
+  killEnemy(e) {
+    e.dead = true; e.hp = 0;
+    e.hpBar.clear();
+    if (e.shadow) e.shadow.destroy();
+    STATE.kills++;
+    this.tweens.add({ targets: e.sprite, alpha: 0, y: '+=14', angle: 90,
+      duration: 350, onComplete: () => e.sprite.destroy() });
+    this.onEnemyKilled(e);
+    if (!this.aliveEnemies().length) this.onRoomCleared();
+  }
+
+  gainXp(amount) {
+    STATE.xp += amount;
+    let leveled = false;
+    while (STATE.xp >= xpToNext(STATE.level)) {
+      STATE.xp -= xpToNext(STATE.level);
+      STATE.level++;
+      leveled = true;
+    }
+    if (leveled) {
+      const s = effectiveStats();
+      this.hero.maxHp = s.hp; this.hero.hp = s.hp;
+      this.hero.atk = s.atk; this.hero.def = s.def;
+      this.hero.crit = s.crit; this.hero.cdr = s.cdr;
+      this.banner('NÍVEL ' + STATE.level + '!  (+1 PONTO DE HABILIDADE)', '#5ec05e');
+    }
+    this.refreshCoreHUD();
+  }
+
+  spawnPacks(total, scale, opts = {}) {
+    const enemies = [];
+    let remaining = total;
+    const centers = [];
+    while (remaining > 0) {
+      const packSize = Math.min(remaining, Phaser.Math.Between(2, 3));
+      remaining -= packSize;
+      let cx, cy, tries = 0;
+      do {
+        cx = Phaser.Math.Between(ARENA.x1 + 200, ARENA.x2 - 40);
+        cy = Phaser.Math.Between(ARENA.y1 + 30, ARENA.y2 - 30);
+        tries++;
+      } while (tries < 20 && (dist({x:cx,y:cy}, this.hero) < 240
+               || centers.some(c => Phaser.Math.Distance.Between(c.x, c.y, cx, cy) < 170)));
+      centers.push({x: cx, y: cy});
+      for (let i = 0; i < packSize; i++) {
+        const def = opts.pool ? Phaser.Utils.Array.GetRandom(opts.pool)
+                              : Phaser.Utils.Array.GetRandom(ENEMY_TYPES);
+        const ang = (i / packSize) * Math.PI * 2 + Math.random();
+        enemies.push(this.spawnEnemyObj(def, scale, {
+          x: Phaser.Math.Clamp(cx + Math.cos(ang) * 38, ARENA.x1, ARENA.x2),
+          y: Phaser.Math.Clamp(cy + Math.sin(ang) * 28, ARENA.y1, ARENA.y2),
+        }));
+      }
+    }
+    return enemies;
+  }
+
+  spawnEnemyObj(def, scale, pos, opts = {}) {
+    const size = opts.size || 1;
+    const e = {
+      nome: opts.nome || def.nome,
+      maxHp: Math.round(def.hp * scale), hp: Math.round(def.hp * scale),
+      atk: Math.round(def.atk * scale),
+      atkSpeed: def.atkSpeed,
+      speed: (def.speed || 70) * (opts.speedMult || 1),
+      aggro: opts.aggro || def.aggro || 170,
+      range: (def.range || 52) * size,
+      gold: Math.round(def.gold * scale),
+      nextAtk: this.time.now + def.atkSpeed * 1000 * (0.6 + Math.random()*0.8),
+      x: pos.x, y: pos.y, spawnX: pos.x, spawnY: pos.y,
+      sprite: this.add.image(pos.x, pos.y, 'tex_' + def.key)
+        .setFlipX(true).setScale(0).setDepth(pos.y / 100 + 2),
+      shadow: this.add.ellipse(pos.x, pos.y + 32*size, 46*size, 11*size, 0x000000, 0.3).setDepth(1),
+      dead: false, angry: !!opts.angry, size,
+      elite: !!opts.elite, boss: !!opts.boss,
+      barW: 56 * size, barOff: 48 * size,
+    };
+    if (opts.tint) e.sprite.setTint(opts.tint);
+    e.hpBar = this.add.graphics().setDepth(8);
+    this.tweens.add({ targets: e.sprite, scale: size, duration: 320,
+      ease: 'Back.out', delay: Math.random() * 300 });
+    return e;
+  }
+
+  spawnPortal() {
+    const px = Phaser.Math.Clamp(this.hero.x + 150, ARENA.x1 + 60, ARENA.x2 - 60);
+    const py = Phaser.Math.Clamp(this.hero.y, ARENA.y1 + 40, ARENA.y2 - 40);
+    const c = this.add.container(px, py).setDepth(py / 100 + 2);
+    const outer = this.add.circle(0, 0, 36).setStrokeStyle(5, 0x7fd4ff, 0.9);
+    const inner = this.add.circle(0, 0, 20, 0x7fd4ff, 0.25);
+    const core  = this.add.circle(0, 0, 8, 0xe8f6ff, 0.9);
+    c.add([outer, inner, core]);
+    this.tweens.add({ targets: inner, scale: 1.5, alpha: 0.08,
+      duration: 700, yoyo: true, repeat: -1 });
+    this.tweens.add({ targets: c, y: py - 6, duration: 800,
+      yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    for (let i = 0; i < 5; i++) {
+      const p = this.add.rectangle(0, 0, 5, 5, 0x7fd4ff).setDepth(9);
+      const ang = { v: (i / 5) * Math.PI * 2 };
+      this.tweens.add({ targets: ang, v: ang.v + Math.PI * 2,
+        duration: 1600, repeat: -1,
+        onUpdate: () => p.setPosition(px + Math.cos(ang.v)*32, py + Math.sin(ang.v)*22) });
+      c.portalBits = c.portalBits || []; c.portalBits.push(p);
+    }
+    const lbl = this.add.text(px, py - 56, 'PORTAL', this.font(8,'#7fd4ff'))
+      .setOrigin(0.5).setDepth(20);
+    this.portal = { x: px, y: py, container: c, label: lbl };
+    this.banner('PORTAL ABERTO!', '#7fd4ff');
+  }
+
+  removePortal() {
+    if (!this.portal) return;
+    (this.portal.container.portalBits || []).forEach(p => p.destroy());
+    this.portal.container.destroy();
+    this.portal.label.destroy();
+    this.portal = null;
+  }
+
+  checkPortal() {
+    if (!this.portal || this.busy) return;
+    if (dist(this.hero, this.portal) < 46) {
+      this.busy = true;
+      this.moveTo = null;
+      this.tweens.add({ targets: this.hero.sprite, scale: 0, angle: 360,
+        x: this.portal.x, y: this.portal.y, duration: 420, ease: 'Quad.in' });
+      this.cameras.main.fadeOut(350, 11, 10, 18);
+      this.time.delayedCall(450, () => {
+        this.removePortal();
+        this.hero.x = 130; this.hero.y = 360;
+        this.hero.sprite.setScale(1).setAngle(0);
+        this.syncUnit(this.hero);
+        this.nextRoom();
+        this.cameras.main.fadeIn(350, 11, 10, 18);
+        this.busy = false;
+      });
+    }
+  }
+}
+
+/* =========================================================================
+   LOBBY — acampamento caminhável
+   ========================================================================= */
+const LOBBY_ARENA = { x1: 60, y1: 335, x2: 900, y2: 505 };
+
+class Lobby extends Phaser.Scene {
+  constructor() { super('Lobby'); }
+  font(size, color) { return fontStyle(size, color); }
+
+  create() {
+    bakeTextures(this);
+    this.panelOpen = null;
+    this.lock = false;
+    this.moveTo = null;
+
+    this.buildCamp();
+    this.buildHeroAvatar();
+    this.buildPOIs();
+    this.buildTopUI();
+    this.setupInput();
+  }
+
+  buildCamp() {
+    this.add.rectangle(W/2, H/2, W, H, 0x151a26).setDepth(-10);
+    const g = this.add.graphics().setDepth(-6);
+    g.fillStyle(0xe8e2d0, 0.8);
+    for (let i = 0; i < 40; i++)
+      g.fillRect(Phaser.Math.Between(0, W), Phaser.Math.Between(0, 190), 2, 2);
+    g.fillStyle(0x1c2435, 1);
+    g.fillTriangle(60, 335, 260, 150, 460, 335);
+    g.fillTriangle(380, 335, 600, 110, 860, 335);
+    g.fillStyle(0x232c40, 1);
+    g.fillTriangle(-40, 335, 140, 200, 340, 335);
+    g.fillTriangle(620, 335, 800, 190, 1020, 335);
+    g.fillStyle(0x1b1622, 1); g.fillRect(0, 335, W, H - 335);
+    g.fillStyle(0x232c40, 0.4);
+    for (let ty = 344; ty < H; ty += 44)
+      for (let tx = (ty % 88 === 0 ? 0 : 44); tx < W; tx += 88)
+        g.fillRect(tx, ty, 42, 42);
+    g.fillStyle(0x2a2235, 1); g.fillRect(0, 335, W, 8);
+    g.fillStyle(0x4a3b2a, 1);
+    g.fillRect(W/2 - 17, 420, 34, 8); g.fillRect(W/2 - 9, 414, 8, 18);
+    const flame = this.add.rectangle(W/2, 405, 18, 24, 0xffa726).setDepth(3);
+    this.tweens.add({ targets: flame, scaleY: 1.5, scaleX: 0.8, alpha: 0.75,
+      duration: 220, yoyo: true, repeat: -1 });
+    const glow = this.add.circle(W/2, 417, 70, 0xffa726, 0.07).setDepth(2);
+    this.tweens.add({ targets: glow, scale: 1.3, alpha: 0.03,
+      duration: 600, yoyo: true, repeat: -1 });
+
+    this.add.text(W/2, 26, 'ACAMPAMENTO', this.font(16, '#ffd34d'))
+      .setOrigin(0.5).setDepth(20);
+    const hint = this.add.text(W/2, H - 12,
+      'TOQUE PARA ANDAR \u2022 APROXIME-SE DE UMA ENTRADA PARA ACESSAR',
+      this.font(7,'#9aa8bd')).setOrigin(0.5, 1).setDepth(20);
+    this.tweens.add({ targets: hint, alpha: 0.35, duration: 1100, yoyo: true, repeat: -1 });
+  }
+
+  buildHeroAvatar() {
+    this.hero = {
+      x: W/2, y: 472, speed: 175,
+      sprite: this.add.image(W/2, 472, 'tex_doll'),
+      shadow: this.add.ellipse(W/2, 504, 50, 12, 0x000000, 0.35).setDepth(1),
+    };
+    this.syncHero();
+  }
+
+  syncHero() {
+    const h = this.hero;
+    h.x = Phaser.Math.Clamp(h.x, LOBBY_ARENA.x1, LOBBY_ARENA.x2);
+    h.y = Phaser.Math.Clamp(h.y, LOBBY_ARENA.y1, LOBBY_ARENA.y2);
+    h.sprite.setPosition(h.x, h.y).setDepth(h.y / 100 + 2);
+    h.shadow.setPosition(h.x, h.y + 32);
+  }
+
+  setupInput() {
+    this.input.on('pointerdown', (pointer, over) => {
+      if (over.length || this.panelOpen || this.lock) return;
+      if (pointer.worldY < LOBBY_ARENA.y1 - 25) return;
+      this.moveTo = {
+        x: Phaser.Math.Clamp(pointer.worldX, LOBBY_ARENA.x1, LOBBY_ARENA.x2),
+        y: Phaser.Math.Clamp(pointer.worldY, LOBBY_ARENA.y1, LOBBY_ARENA.y2),
+      };
+      const r = this.add.circle(this.moveTo.x, this.moveTo.y, 4)
+        .setStrokeStyle(3, 0x5ec05e, 1).setDepth(1);
+      this.tweens.add({ targets: r, radius: 22, alpha: 0, duration: 350, ease: 'Quad.out',
+        onUpdate: () => r.setStrokeStyle(3, 0x5ec05e, Math.max(r.alpha, 0)),
+        onComplete: () => r.destroy() });
+    });
+  }
+
+  buildPOIs() {
+    this.pois = [];
+    const g = this.add.graphics().setDepth(0);
+
+    g.fillStyle(0x4a3b2a, 1);
+    g.fillRect(818, 252, 14, 90); g.fillRect(876, 252, 14, 90);
+    g.fillRect(810, 242, 88, 14);
+    g.fillStyle(0x5ec05e, 0.15); g.fillRect(832, 252, 44, 90);
+    this.addPOI({ x: 854, y: 386, r: 55, color: 0x5ec05e, label: 'EXPEDIÇÃO',
+      confirm: () => 'Partir em EXPEDIÇÃO?\nZona ' + STATE.zone + ' \u2014 Sala ' + STATE.room,
+      onEnter: () => this.scene.start('Expedition') });
+
+    g.fillStyle(0x2a2235, 1); g.fillRect(78, 244, 110, 98);
+    g.fillStyle(0x0b0a12, 1); g.fillRect(103, 270, 60, 72);
+    g.fillStyle(0x3a2a4a, 1);
+    g.fillTriangle(78, 244, 133, 208, 188, 244);
+    const doorGlow = this.add.rectangle(133, 306, 60, 70, 0xc45aff, 0.12).setDepth(0);
+    this.tweens.add({ targets: doorGlow, alpha: 0.28, duration: 900, yoyo: true, repeat: -1 });
+    this.addPOI({ x: 133, y: 386, r: 55, color: 0xc45aff, label: 'MASMORRA',
+      confirm: () => 'Entrar na CRIPTA SOMBRIA?\nNv. recomendado 10+ \u2014 morrer = sem loot',
+      onEnter: () => this.scene.start('Dungeon') });
+
+    g.fillStyle(0x6e5a2a, 1); g.fillTriangle(560, 342, 640, 272, 720, 342);
+    g.fillStyle(0x4a3a22, 1); g.fillRect(575, 322, 130, 20);
+    const merchant = this.add.image(640, 374, 'tex_hero')
+      .setTint(0xc8b04a).setFlipX(true).setDepth(5);
+    this.tweens.add({ targets: merchant, y: '+=3', duration: 520,
+      yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    this.addPOI({ x: 640, y: 416, r: 50, color: 0xffd34d, label: 'LOJA',
+      onEnter: () => this.openShop() });
+
+    g.fillStyle(0x2a3344, 1);
+    g.fillRect(330, 252, 14, 90); g.fillRect(420, 252, 14, 90);
+    g.fillStyle(0x1c2435, 1); g.fillRect(322, 240, 120, 16);
+    this.add.text(382, 292, '\u26D3', this.font(20, '#5b6678')).setOrigin(0.5).setDepth(0);
+    this.addPOI({ x: 382, y: 386, r: 48, color: 0x5b6678, label: 'RAID',
+      onEnter: () => this.toast('A RAID ainda está selada...') });
+  }
+
+  addPOI(poi) {
+    const ring = this.add.ellipse(poi.x, poi.y, poi.r * 2, poi.r * 1.1)
+      .setStrokeStyle(3, poi.color, 0.5).setDepth(0);
+    this.tweens.add({ targets: ring, alpha: 0.25, duration: 800, yoyo: true, repeat: -1 });
+    this.add.text(poi.x, poi.y - poi.r - 6, poi.label,
+      this.font(8, '#' + poi.color.toString(16).padStart(6, '0')))
+      .setOrigin(0.5).setDepth(20);
+    poi.armed = true;
+    this.pois.push(poi);
+  }
+
+  toast(msg, color = '#9aa8bd') {
+    const t = this.add.text(W/2, 120, msg, this.font(10, color))
+      .setOrigin(0.5).setDepth(70).setAlpha(0);
+    this.tweens.add({ targets: t, alpha: 1, duration: 200 });
+    this.tweens.add({ targets: t, alpha: 0, delay: 1400, duration: 400,
+      onComplete: () => t.destroy() });
+  }
+
+  update(time, delta) {
+    if (this.panelOpen || this.lock) return;
+    const h = this.hero, dt = delta / 1000;
+    if (this.moveTo) {
+      const d = Phaser.Math.Distance.Between(h.x, h.y, this.moveTo.x, this.moveTo.y);
+      if (d < 4) this.moveTo = null;
+      else {
+        const step = Math.min(h.speed * dt, d);
+        h.x += (this.moveTo.x - h.x) / d * step;
+        h.y += (this.moveTo.y - h.y) / d * step;
+        if (Math.abs(this.moveTo.x - h.x) > 1) h.sprite.setFlipX(this.moveTo.x < h.x);
+      }
+      this.syncHero();
+    }
+    this.pois.forEach(poi => {
+      const d = Phaser.Math.Distance.Between(h.x, h.y, poi.x, poi.y);
+      if (!poi.armed) { if (d > poi.r + 36) poi.armed = true; return; }
+      if (d < poi.r) {
+        poi.armed = false;
+        this.moveTo = null;
+        if (poi.confirm) this.confirmPOI(poi);
+        else poi.onEnter();
+      }
+    });
+  }
+
+  confirmPOI(poi) {
+    const c = this.add.container(0, 0).setDepth(60);
+    this.panelOpen = c;
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.7).setInteractive();
+    const panel = this.add.rectangle(W/2, H/2, 540, 200, 0x141019)
+      .setStrokeStyle(4, poi.color);
+    const t = this.add.text(W/2, H/2 - 40, poi.confirm(), this.font(10))
+      .setOrigin(0.5).setAlign('center');
+    const yes = this.add.text(W/2 - 100, H/2 + 50, 'ENTRAR', this.font(10,'#5ec05e'))
+      .setOrigin(0.5).setPadding(10).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => { this.lock = true; c.destroy(); poi.onEnter(); });
+    const no = this.add.text(W/2 + 100, H/2 + 50, 'AGORA NÃO', this.font(10,'#9aa8bd'))
+      .setOrigin(0.5).setPadding(10).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => { c.destroy(); this.panelOpen = null; });
+    c.add([dim, panel, t, yes, no]);
+  }
+
+  buildTopUI() {
+    const fx = W - 132, fy = 46;
+    const frame = this.add.container(fx, fy).setDepth(25);
+    const bg = this.add.rectangle(0, 0, 240, 66, 0x141019).setStrokeStyle(3, 0xffd34d);
+    const headBg = this.add.rectangle(-90, 0, 50, 50, 0x241c2e).setStrokeStyle(2, 0x7d8ca3);
+    const head = this.add.image(-90, 2, 'tex_head').setScale(1.2);
+    this.frName = this.add.text(-56, -22, 'GUERREIRO', this.font(8));
+    this.frLv = this.add.text(-56, -3, '', this.font(7, '#9aa8bd'));
+    this.frPw = this.add.text(-56, 15, '', this.font(7, '#ffd34d'));
+    frame.add([bg, headBg, head, this.frName, this.frLv, this.frPw]);
+    frame.setSize(240, 66).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => { if (!this.panelOpen) this.openCharacter('geral'); });
+
+    // badge de pontos de habilidade disponíveis
+    this.skillBadge = this.add.text(fx + 104, fy - 30, '', this.font(8, '#0b0a12'))
+      .setOrigin(0.5).setDepth(26).setBackgroundColor('#5ec05e').setPadding(4);
+
+    const cfg = this.add.container(54, 46).setDepth(25);
+    const cbg = this.add.rectangle(0, 0, 64, 64, 0x141019).setStrokeStyle(3, 0x7d8ca3);
+    const gear = this.add.text(0, -2, '\u2699', this.font(28, '#9aa8bd')).setOrigin(0.5);
+    cfg.add([cbg, gear]);
+    cfg.setSize(64, 64).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => { if (!this.panelOpen) this.openSettings(); });
+
+    this.refreshFrame();
+  }
+
+  refreshFrame() {
+    this.frLv.setText('NV.' + STATE.level + '  OURO ' + STATE.gold);
+    this.frPw.setText('PODER ' + heroPower());
+    const pts = skillPointsAvailable();
+    this.skillBadge.setText(pts > 0 ? '+' + pts : '').setVisible(pts > 0);
+  }
+
+  panel(title, color, w = 640, ph = 420) {
+    const c = this.add.container(0, 0).setDepth(50);
+    this.panelOpen = c;
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.78).setInteractive();
+    const panel = this.add.rectangle(W/2, H/2, w, ph, 0x141019).setStrokeStyle(4, color);
+    const t = this.add.text(W/2, H/2 - ph/2 + 26, title, this.font(13, '#ffd34d')).setOrigin(0.5);
+    const close = this.add.text(W/2, H/2 + ph/2 - 26, 'FECHAR', this.font(10,'#c03a3a'))
+      .setOrigin(0.5).setPadding(8).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => { c.destroy(); this.panelOpen = null; this.refreshFrame(); });
+    c.add([dim, panel, t, close]);
+    return c;
+  }
+
+  /* ---------- FICHA DO PERSONAGEM (tabs GERAL | HABILIDADES) ---------- */
+  reopenCharacter(tab) {
+    if (this.panelOpen) { this.panelOpen.destroy(); this.panelOpen = null; }
+    refreshDoll(this);
+    this.refreshFrame();
+    this.openCharacter(tab);
+  }
+
+  openCharacter(tab = 'geral') {
+    const c = this.panel('PERSONAGEM', 0x7d8ca3, 900, 500);
+    const L = W/2 - 450, T = H/2 - 250;
+
+    // tabs
+    const mkTab = (x, label, id) => {
+      const active = tab === id;
+      const r = this.add.rectangle(x, T + 56, 200, 32, active ? 0x2a3344 : 0x1c1622)
+        .setStrokeStyle(2, active ? 0xffd34d : 0x3a3144);
+      const t = this.add.text(x, T + 56, label,
+        this.font(8, active ? '#ffd34d' : '#9aa8bd')).setOrigin(0.5);
+      c.add([r, t]);
+      if (!active) {
+        r.setInteractive({ useHandCursor: true })
+          .on('pointerdown', () => this.reopenCharacter(id));
+      }
+    };
+    mkTab(W/2 - 110, 'GERAL', 'geral');
+    mkTab(W/2 + 110, 'HABILIDADES', 'skills');
+
+    if (tab === 'geral') this.fillGeralTab(c, L, T);
+    else this.fillSkillsTab(c, L, T);
+  }
+
+  fillGeralTab(c, L, T) {
+    const s = effectiveStats();
+
+    // coluna 1: paper doll
+    c.add(this.add.rectangle(L + 120, T + 200, 180, 220, 0x1c1622).setStrokeStyle(2, 0x3a3144));
+    const spr = this.add.image(L + 120, T + 190, 'tex_doll').setScale(2.2);
+    this.tweens.add({ targets: spr, y: '+=5', duration: 600,
+      yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    c.add(spr);
+    c.add(this.add.text(L + 120, T + 282, 'NV.' + STATE.level + '  PODER ' + heroPower(),
+      this.font(7,'#ffd34d')).setOrigin(0.5));
+
+    // coluna 2: status
+    c.add(this.add.text(L + 250, T + 92, 'STATUS', this.font(8,'#9aa8bd')));
+    const rows = [
+      ['HP', String(s.hp)], ['ATAQUE', String(s.atk)], ['DEFESA', String(s.def)],
+      ['CRÍTICO', Math.round(s.crit*100) + '%'], ['CDR', Math.round(s.cdr*100) + '%'],
+    ];
+    rows.forEach((r, i) => {
+      const y = T + 118 + i * 26;
+      c.add(this.add.text(L + 250, y, r[0], this.font(7,'#9aa8bd')));
+      c.add(this.add.text(L + 410, y, r[1], this.font(7)).setOrigin(1, 0));
+    });
+    c.add(this.add.text(L + 250, T + 256,
+      'SKILL: ' + SKILLS[STATE.skills.equipped].nome, this.font(7,'#7fd4ff')));
+
+    // coluna 3: slots (clicar = desequipar)
+    c.add(this.add.text(L + 480, T + 92, 'EQUIPAMENTOS  (toque p/ remover)', this.font(7,'#9aa8bd')));
+    EQUIP_SLOTS.forEach((slot, i) => {
+      const col = i % 3, row = Math.floor(i / 3);
+      const x = L + 540 + col * 140, y = T + 150 + row * 90;
+      const uid = STATE.equipped[slot.key];
+      const inst = uid && findItem(uid);
+      const db = inst && ITEM_DB[inst.id];
+      const stroke = db ? Phaser.Display.Color.HexStringToColor(RARITY_COLOR[db.raridade]).color : 0x3a3144;
+      const box = this.add.rectangle(x, y, 120, 64, 0x1c1622).setStrokeStyle(2, stroke);
+      c.add(box);
+      c.add(this.add.text(x, y - 22, slot.label, this.font(6,'#9aa8bd')).setOrigin(0.5));
+      if (db) {
+        c.add(this.add.text(x, y + 2, db.nome, this.font(6, RARITY_COLOR[db.raridade]))
+          .setOrigin(0.5).setWordWrapWidth(112).setAlign('center'));
+        box.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
+          STATE.equipped[slot.key] = null;
+          this.reopenCharacter('geral');
+        });
+      } else {
+        c.add(this.add.text(x, y + 4, '\u2014', this.font(10,'#3a3144')).setOrigin(0.5));
+      }
+    });
+
+    // faixa inferior: inventário (clicar = equipar)
+    c.add(this.add.text(L + 60, T + 318, 'INVENTÁRIO  (' + STATE.items.length +
+      ')  \u2014 toque p/ equipar', this.font(8,'#9aa8bd')));
+    const equippedUids = Object.values(STATE.equipped).filter(Boolean);
+    const bag = STATE.items.filter(it => !equippedUids.includes(it.uid));
+    if (!bag.length) {
+      c.add(this.add.text(L + 60, T + 346,
+        'Mochila vazia. Expedição dropa Comum/Incomum; Masmorra, Raro/Épico.',
+        this.font(7,'#5b6678')));
+    } else {
+      bag.slice(0, 8).forEach((it, i) => {
+        const db = ITEM_DB[it.id];
+        const col = i % 2, row = Math.floor(i / 2);
+        const t = this.add.text(L + 60 + col * 400, T + 346 + row * 26,
+          '[' + db.raridade[0] + '] ' + db.nome + '  ' + statLine(db.stats),
+          this.font(7, RARITY_COLOR[db.raridade]))
+          .setPadding(3).setInteractive({ useHandCursor: true })
+          .on('pointerdown', () => {
+            STATE.equipped[db.slot] = it.uid;
+            this.reopenCharacter('geral');
+          });
+        c.add(t);
+      });
+      if (bag.length > 8) c.add(this.add.text(L + 60, T + 346 + 4 * 26,
+        '+' + (bag.length - 8) + ' itens na mochila...', this.font(7,'#5b6678')));
+    }
+  }
+
+  /* ---------- aba HABILIDADES: árvore com ramificações ---------- */
+  fillSkillsTab(c, L, T) {
+    const pts = skillPointsAvailable();
+    c.add(this.add.text(W/2, T + 92,
+      'PONTOS DISPONÍVEIS: ' + pts + '  (+1 por nível)',
+      this.font(9, pts > 0 ? '#5ec05e' : '#9aa8bd')).setOrigin(0.5));
+
+    const nodePos = n => ({ x: W/2 + n.col * 190, y: T + 140 + n.row * 80 });
+
+    // conexões
+    const lines = this.add.graphics();
+    SKILL_TREE.forEach(n => {
+      if (!n.req) return;
+      const a = nodePos(SKILL_TREE.find(m => m.id === n.req));
+      const b = nodePos(n);
+      const unlocked = !!STATE.skills.nodes[n.id];
+      lines.lineStyle(3, unlocked ? 0xffd34d : 0x3a3144, 1);
+      lines.lineBetween(a.x, a.y, b.x, b.y);
+    });
+    c.add(lines);
+
+    // nós
+    SKILL_TREE.forEach(n => {
+      const p = nodePos(n);
+      const unlocked = !!STATE.skills.nodes[n.id];
+      const reqOk = !n.req || !!STATE.skills.nodes[n.req];
+      const canBuy = !unlocked && reqOk && pts > 0;
+      const isEquipped = n.tipo === 'ativa' && STATE.skills.equipped === n.id;
+
+      const fill = unlocked ? (n.tipo === 'ativa' ? 0x2a3344 : 0x2e4a36) : 0x1c1622;
+      const stroke = isEquipped ? 0x7fd4ff
+        : unlocked ? 0xffd34d : (canBuy ? 0x5ec05e : 0x3a3144);
+      const circle = this.add.circle(p.x, p.y, 26, fill).setStrokeStyle(3, stroke);
+      c.add(circle);
+      if (canBuy) this.tweens.add({ targets: circle, scale: 1.12,
+        duration: 500, yoyo: true, repeat: -1 });
+
+      c.add(this.add.text(p.x, p.y, n.tipo === 'ativa' ? '\u2694' : '\u2191',
+        this.font(13, unlocked ? '#ffd34d' : '#5b6678')).setOrigin(0.5));
+      c.add(this.add.text(p.x, p.y + 38, n.nome,
+        this.font(7, unlocked ? '#e8e2d0' : '#5b6678')).setOrigin(0.5));
+      c.add(this.add.text(p.x, p.y + 52, n.desc,
+        this.font(5, '#9aa8bd')).setOrigin(0.5));
+      if (isEquipped) c.add(this.add.text(p.x, p.y - 38, 'EQUIPADA',
+        this.font(6, '#7fd4ff')).setOrigin(0.5));
+      else if (unlocked && n.tipo === 'ativa')
+        c.add(this.add.text(p.x, p.y - 38, 'TOQUE P/ EQUIPAR',
+          this.font(5, '#5ec05e')).setOrigin(0.5));
+
+      circle.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
+        if (!unlocked && canBuy) {
+          STATE.skills.nodes[n.id] = true;            // gasta 1 ponto
+          this.reopenCharacter('skills');
+        } else if (unlocked && n.tipo === 'ativa' && !isEquipped) {
+          STATE.skills.equipped = n.id;               // troca a skill ativa
+          this.reopenCharacter('skills');
+        } else if (!unlocked && !reqOk) {
+          this.toast('Requer: ' + SKILL_TREE.find(m => m.id === n.req).nome, '#c03a3a');
+        } else if (!unlocked && pts <= 0) {
+          this.toast('Sem pontos de habilidade (suba de nível)', '#c03a3a');
+        }
+      });
+    });
+  }
+
+  openSettings() {
+    const c = this.panel('CONFIGURAÇÕES', 0x7d8ca3, 580, 400);
+    const mkToggle = (y, label, get, set) => {
+      c.add(this.add.text(W/2 - 240, y, label, this.font(8,'#9aa8bd')));
+      const btn = this.add.text(W/2 + 240, y, '', this.font(9))
+        .setOrigin(1, 0).setPadding(6).setInteractive({ useHandCursor: true });
+      const upd = () => btn.setText(get() ? 'ON' : 'OFF')
+        .setColor(get() ? '#5ec05e' : '#c03a3a');
+      btn.on('pointerdown', () => { set(!get()); upd(); });
+      upd();
+      c.add(btn);
+    };
+    mkToggle(H/2 - 110, 'AUTO AO ENTRAR EM COMBATE',
+      () => STATE.settings.autoDefault, v => STATE.settings.autoDefault = v);
+    mkToggle(H/2 - 70, 'NÚMEROS DE DANO',
+      () => STATE.settings.dmgNumbers, v => STATE.settings.dmgNumbers = v);
+
+    /* ---------- BOTÃO DE DEBUG ---------- */
+    const dbg = this.add.rectangle(W/2, H/2 + 10, 460, 46, 0x4a2020)
+      .setStrokeStyle(2, 0xc03a3a).setInteractive({ useHandCursor: true });
+    const dbgTxt = this.add.text(W/2, H/2 + 10,
+      'DEBUG: +1 NÍVEL E TODOS OS ITENS', this.font(8,'#ff7a6e')).setOrigin(0.5);
+    dbg.on('pointerdown', () => {
+      STATE.level++; STATE.xp = 0;
+      let granted = 0;
+      Object.keys(ITEM_DB).forEach(id => {
+        if (!STATE.items.some(it => it.id === id)) { addItem(id); granted++; }
+      });
+      this.refreshFrame();
+      this.toast('DEBUG: NV.' + STATE.level + ' \u2022 +' + granted +
+        ' itens \u2022 +1 ponto de habilidade', '#ff7a6e');
+    });
+    c.add([dbg, dbgTxt]);
+
+    c.add(this.add.text(W/2, H/2 + 90,
+      'Idle Raid \u2014 protótipo v6\nPhaser 3 \u2022 paper doll \u2022 árvore de habilidades',
+      this.font(7,'#5b6678')).setOrigin(0.5).setAlign('center'));
+  }
+
+  openShop() {
+    const c = this.panel('LOJA', 0xffd34d);
+    const refreshLabels = [];
+    SHOP.forEach((item, i) => {
+      const y = H/2 - 90 + i * 90;
+      const box = this.add.rectangle(W/2, y, 540, 70, 0x1c1622).setStrokeStyle(2, 0x3a3144);
+      const owned = this.add.text(W/2 - 250, y - 18, '', this.font(9));
+      const desc = this.add.text(W/2 - 250, y + 8, item.desc, this.font(7,'#9aa8bd'));
+      const buy = this.add.rectangle(W/2 + 190, y, 130, 44, 0x4a3a22).setStrokeStyle(2, 0xffd34d)
+        .setInteractive({ useHandCursor: true });
+      const buyTxt = this.add.text(W/2 + 190, y, item.preco + ' OURO', this.font(8,'#ffd34d')).setOrigin(0.5);
+      buy.on('pointerdown', () => {
+        if (STATE.gold < item.preco) {
+          this.tweens.add({ targets: [buy, buyTxt], x: '+=4', duration: 40, yoyo: true, repeat: 2 });
+          return;
+        }
+        STATE.gold -= item.preco;
+        STATE.potions[item.id]++;
+        this.refreshFrame();
+        refreshLabels.forEach(f => f());
+      });
+      const upd = () => owned.setText(item.nome + '  (x' + STATE.potions[item.id] + ')');
+      refreshLabels.push(upd); upd();
+      c.add([box, owned, desc, buy, buyTxt]);
+    });
+    c.add(this.add.text(W/2, H/2 + 110,
+      'Poções são usadas manualmente na Masmorra.\nEm breve: melhoria de equipamentos e runas.',
+      this.font(7,'#9aa8bd')).setOrigin(0.5).setAlign('center'));
+  }
+}
+
+/* =========================================================================
+   EXPEDIÇÃO
+   ========================================================================= */
+class Expedition extends BaseCombat {
+  constructor() { super('Expedition'); }
+
+  create() {
+    bakeTextures(this);
+    this.busy = false; this.menuOpen = false; this.portal = null;
+    this.buildArena(ZONE_TINTS[(STATE.zone-1) % ZONE_TINTS.length]);
+    this.buildHero();
+    this.setupInput();
+    this.buildCoreHUD();
+    this.txtZone = this.add.text(16, 14, '', this.font(13,'#ffd34d')).setDepth(20);
+    this.txtRoom = this.add.text(16, 38, '', this.font(10)).setDepth(20);
+    this.refreshCoreHUD();
+    this.spawnRoom();
+  }
+
+  menuOptions() {
+    return [
+      { label: 'CONTINUAR EXPEDIÇÃO', color:'#5ec05e', onPick: () => {} },
+      { label: 'MASMORRA: CRIPTA SOMBRIA', color:'#c45aff',
+        onPick: () => this.scene.start('Dungeon') },
+      { label: 'RAID (EM BREVE)', locked: true },
+      { label: 'VOLTAR AO LOBBY', onPick: () => this.scene.start('Lobby') },
+    ];
+  }
+
+  spawnRoom() {
+    const scale = 1 + (STATE.zone-1)*0.45 + (STATE.room-1)*0.12;
+    const total = 5 + Math.min(STATE.room, 3);
+    const pool = ENEMY_TYPES.slice(0, Math.min(2 + STATE.room - 1, 3));
+    this.enemies = this.spawnPacks(total, scale, { pool });
+    this.txtZone.setText('ZONA ' + STATE.zone + ' \u2014 ' +
+      ZONE_NAMES[(STATE.zone-1) % ZONE_NAMES.length]);
+    this.txtRoom.setText('SALA ' + STATE.room + '/3  \u2022  ' + this.enemies.length + ' INIMIGOS');
+  }
+
+  update(time, delta) { this.baseUpdate(time, delta); }
+
+  onEnemyKilled(e) {
+    STATE.gold += e.gold;
+    this.floatDamage(e.x, e.y - 70, 0, { text: '+' + e.gold + ' OURO', color: '#ffd34d' });
+    this.gainXp(Math.round(4 + e.maxHp * 0.06));
+    // drop de equipamento Comum/Incomum (10%)
+    if (Math.random() < 0.10) {
+      const rar = Math.random() < 0.75 ? 'Comum' : 'Incomum';
+      const pool = itemsByPool('exp', [rar]);
+      if (pool.length) {
+        const id = Phaser.Utils.Array.GetRandom(pool);
+        addItem(id);
+        this.floatDamage(e.x, e.y - 92, 0, {
+          text: ITEM_DB[id].nome.toUpperCase(),
+          color: RARITY_COLOR[rar], crit: true });
+      }
+    }
+    this.refreshCoreHUD();
+  }
+
+  onRoomCleared() {
+    const zoneDone = STATE.room === 3;
+    this.banner(zoneDone ? 'ZONA ' + STATE.zone + ' CONCLUÍDA!' : 'SALA LIMPA!',
+      zoneDone ? '#ffd34d' : '#5ec05e');
+    this.spawnPortal();
+  }
+
+  nextRoom() {
+    if (STATE.room === 3) {
+      STATE.zone++; STATE.room = 1;
+      this.hero.hp = this.hero.maxHp;
+      this.bgTint.fillColor = ZONE_TINTS[(STATE.zone-1) % ZONE_TINTS.length];
+    } else {
+      STATE.room++;
+    }
+    this.spawnRoom();
+  }
+
+  onHeroDown() {
+    if (this.busy) return;
+    this.busy = true;
+    this.banner('DERROTA...', '#c03a3a');
+    this.tweens.add({ targets: this.hero.sprite, angle: -90, alpha: 0.4, duration: 400 });
+    this.time.delayedCall(2000, () => {
+      this.hero.hp = this.hero.maxHp;
+      this.hero.x = 130; this.hero.y = 360;
+      this.hero.sprite.setAngle(0).setAlpha(1);
+      this.syncUnit(this.hero);
+      this.aliveEnemies().forEach(e => {
+        e.hpBar.clear(); e.sprite.destroy(); if (e.shadow) e.shadow.destroy();
+      });
+      this.removePortal();
+      this.busy = false;
+      this.spawnRoom();
+    });
+  }
+}
+
+/* =========================================================================
+   MASMORRA — Cripta Sombria
+   ========================================================================= */
+const DUNGEON = {
+  nome: 'CRIPTA SOMBRIA',
+  totalRooms: 6,
+  scale: () => 1.0 + (STATE.level - 1) * 0.07,
+};
+
+class Dungeon extends BaseCombat {
+  constructor() { super('Dungeon'); }
+
+  create() {
+    bakeTextures(this);
+    this.busy = false; this.menuOpen = false; this.portal = null;
+    this.menuPausesCombat = false;
+    this.roomIdx = 1;
+    this.pending = { xp: 0, gold: 0, items: [] }; // items: ids do ITEM_DB
+    this.ended = false;
+
+    this.buildArena(0x1c1426);
+    this.buildHero();
+    this.setupInput();
+    this.buildCoreHUD();
+
+    this.txtDg = this.add.text(16, 14, '', this.font(13,'#c45aff')).setDepth(20);
+    this.txtDgRoom = this.add.text(16, 38, '', this.font(10)).setDepth(20);
+    this.progressG = this.add.graphics().setDepth(20);
+    this.txtPending = this.add.text(16, 64, '', this.font(8,'#9aa8bd')).setDepth(20);
+
+    this.buildPotions();
+    this.refreshCoreHUD();
+    this.banner('CRIPTA SOMBRIA', '#c45aff');
+    this.spawnRoom();
+  }
+
+  menuOptions() {
+    const abandon = (goTo) => this.confirmDialog(
+      'ABANDONAR A MASMORRA?\n\nVocê perderá todas as\nrecompensas deste run.',
+      'ABANDONAR',
+      () => this.scene.start(goTo));
+    return [
+      { label: 'CONTINUAR MASMORRA', color:'#c45aff', onPick: () => {} },
+      { label: 'VOLTAR À EXPEDIÇÃO (ABANDONA)', color:'#c03a3a',
+        onPick: () => abandon('Expedition') },
+      { label: 'RAID (EM BREVE)', locked: true },
+      { label: 'VOLTAR AO LOBBY (ABANDONA)', color:'#c03a3a',
+        onPick: () => abandon('Lobby') },
+    ];
+  }
+
+  buildPotions() {
+    const mk = (x, label, color, id, onUse) => {
+      const c = this.add.container(x, H-90).setDepth(20);
+      const ring = this.add.circle(0, 0, 32, 0x241c2e).setStrokeStyle(3, color);
+      const lbl = this.add.text(0, -4, label, this.font(9)).setOrigin(0.5);
+      const cnt = this.add.text(0, 18, '', this.font(8,'#ffd34d')).setOrigin(0.5);
+      c.add([ring, lbl, cnt]);
+      c.setSize(70, 70).setInteractive({ useHandCursor: true })
+        .on('pointerdown', () => {
+          if (this.busy || this.ended) return;
+          if (STATE.potions[id] <= 0) {
+            this.tweens.add({ targets: c, x: '+=4', duration: 40, yoyo: true, repeat: 2 });
+            return;
+          }
+          STATE.potions[id]--;
+          onUse();
+          c.refresh();
+        });
+      c.refresh = () => cnt.setText('x' + STATE.potions[id]);
+      c.refresh();
+      return c;
+    };
+    this.hpPotBtn = mk(W-260, '+HP', 0xff5a4d, 'hp', () => {
+      const heal = Math.round(this.hero.maxHp * 0.5);
+      this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + heal);
+      this.floatDamage(this.hero.x, this.hero.y - 60, 0,
+        { text: '+' + heal, color: '#5ec05e', crit: true });
+      this.potionFx(0x5ec05e);
+    });
+    this.mpPotBtn = mk(W-180, '+MP', 0x4da3ff, 'mp', () => {
+      this.hero.mp = Math.min(this.hero.maxMp, this.hero.mp + 60);
+      this.floatDamage(this.hero.x, this.hero.y - 60, 0,
+        { text: '+60 MP', color: '#4da3ff' });
+      this.potionFx(0x4da3ff);
+    });
+  }
+
+  potionFx(color) {
+    const h = this.hero;
+    for (let i = 0; i < 8; i++) {
+      const p = this.add.rectangle(
+        h.x + Phaser.Math.Between(-24, 24), h.y + 30, 5, 5, color).setDepth(9);
+      this.tweens.add({ targets: p, y: h.y - 60 - Math.random()*20, alpha: 0,
+        duration: 600, ease: 'Quad.out', onComplete: () => p.destroy() });
+    }
+  }
+
+  roomKind(idx) { return idx <= 4 ? 'comum' : (idx === 5 ? 'elite' : 'chefe'); }
+
+  spawnRoom() {
+    const kind = this.roomKind(this.roomIdx);
+    const s = DUNGEON.scale();
+
+    if (kind === 'comum') {
+      const total = 5 + Math.min(this.roomIdx, 3);
+      this.enemies = this.spawnPacks(total, s * (1 + this.roomIdx*0.08));
+    } else if (kind === 'elite') {
+      const def = { ...ENEMY_TYPES[2], hp: 160, atk: 14, atkSpeed: 2.8, gold: 30,
+        speed: 85, aggro: 999, range: 70 };
+      this.enemies = [this.spawnEnemyObj(def, s, {x: 700, y: 360},
+        { nome:'Esqueleto Ancião', elite: true, size: 1.6, tint: 0xffb0a0, angry: true })];
+      this.banner('SALA DE ELITE', '#ff8c5a');
+    } else {
+      const def = { key:'boss', nome:'Senhor da Cripta',
+        hp: 380, atk: 18, atkSpeed: 3.4, gold: 80,
+        speed: 62, aggro: 999, range: 84 };
+      this.enemies = [this.spawnEnemyObj(def, s, {x: 700, y: 350},
+        { boss: true, size: 2.0, angry: true })];
+      this.banner('CHEFE: SENHOR DA CRIPTA', '#c45aff');
+    }
+    this.refreshDgHUD();
+  }
+
+  refreshDgHUD() {
+    const kind = this.roomKind(this.roomIdx);
+    const label = kind === 'comum' ? ('SALA ' + this.roomIdx + '/' + DUNGEON.totalRooms)
+      : (kind === 'elite' ? 'ELITE (5/6)' : 'CHEFE (6/6)');
+    this.txtDg.setText(DUNGEON.nome);
+    this.txtDgRoom.setText(label);
+    const g = this.progressG; g.clear();
+    for (let i = 1; i <= DUNGEON.totalRooms; i++) {
+      const x = 220 + (i-1) * 26, y = 22;
+      const col = i < this.roomIdx ? 0x5ec05e
+        : (i === this.roomIdx ? 0xffd34d : 0x3a3144);
+      if (i <= 4) { g.fillStyle(col, 1); g.fillCircle(x, y, 7); }
+      else if (i === 5) { g.fillStyle(col, 1); g.fillRect(x-8, y-8, 16, 16); }
+      else {
+        g.fillStyle(col, 1);
+        g.fillTriangle(x, y-11, x-11, y, x+11, y);
+        g.fillTriangle(x-11, y, x+11, y, x, y+11);
+      }
+    }
+    this.txtPending.setText('RUN: +' + this.pending.xp + ' XP  +' +
+      this.pending.gold + ' OURO  ' + this.pending.items.length + ' ITEM(NS)');
+  }
+
+  update(time, delta) { this.baseUpdate(time, delta); }
+
+  onEnemyDamaged(e) {
+    if (e.boss && !e.enraged && e.hp / e.maxHp <= 0.3) {
+      e.enraged = true;
+      e.atkSpeed *= 0.6;
+      e.speed *= 1.4;
+      e.atk = Math.round(e.atk * 1.25);
+      e.sprite.setTint(0xff8080);
+      this.banner('O CHEFE ESTÁ FURIOSO!', '#ff3b2f');
+      this.cameras.main.shake(250, 0.008);
+    }
+  }
+
+  onEnemyKilled(e) {
+    this.pending.gold += e.gold;
+    this.pending.xp += Math.round(6 + e.maxHp * 0.08);
+    if (e.elite && Math.random() < 0.35) this.dropItem('Raro', e);
+    if (e.boss) this.dropItem(Math.random() < 0.3 ? 'Epico' : 'Raro', e);
+    this.refreshDgHUD();
+  }
+
+  dropItem(rarity, e) {
+    const pool = itemsByPool('dg', [rarity]);
+    const id = Phaser.Utils.Array.GetRandom(pool);
+    this.pending.items.push(id);
+    this.floatDamage(e.x, e.y - e.barOff - 26, 0,
+      { text: rarity.toUpperCase() + ': ' + ITEM_DB[id].nome.toUpperCase(),
+        color: RARITY_COLOR[rarity], crit: true });
+  }
+
+  onRoomCleared() {
+    if (this.ended) return;
+    const s = DUNGEON.scale();
+    this.pending.xp += Math.round(15 * s);
+    this.pending.gold += Math.round(10 * s);
+    this.refreshDgHUD();
+
+    if (this.roomIdx === DUNGEON.totalRooms) { this.victory(); return; }
+
+    const next = this.roomKind(this.roomIdx + 1);
+    this.banner(next === 'elite' ? 'A ELITE AGUARDA...' :
+      (next === 'chefe' ? 'O CHEFE AGUARDA...' : 'SALA LIMPA!'),
+      next === 'comum' ? '#5ec05e' : '#ff8c5a');
+    this.spawnPortal();
+  }
+
+  nextRoom() {
+    this.roomIdx++;
+    this.spawnRoom();
+  }
+
+  victory() {
+    this.ended = true; this.busy = true;
+    this.banner('MASMORRA CONCLUÍDA!', '#ffd34d');
+    STATE.gold += this.pending.gold;
+    this.pending.items.forEach(id => addItem(id));
+    this.gainXp(this.pending.xp);
+    this.time.delayedCall(900, () => this.summary(true));
+  }
+
+  onHeroDown() {
+    if (this.ended) return;
+    this.busy = true; this.ended = true;
+    this.banner('VOCÊ CAIU NA CRIPTA...', '#c03a3a');
+    this.tweens.add({ targets: this.hero.sprite, angle: -90, alpha: 0.4, duration: 400 });
+    this.time.delayedCall(1200, () => this.summary(false));
+  }
+
+  summary(victory) {
+    const c = this.add.container(0, 0).setDepth(60);
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.82).setInteractive();
+    const panel = this.add.rectangle(W/2, H/2, 620, 380, 0x141019)
+      .setStrokeStyle(4, victory ? 0xffd34d : 0xc03a3a);
+    const title = this.add.text(W/2, H/2 - 150,
+      victory ? 'VITÓRIA!' : 'DERROTA',
+      this.font(20, victory ? '#ffd34d' : '#c03a3a')).setOrigin(0.5);
+    c.add([dim, panel, title]);
+
+    if (victory) {
+      ['+' + this.pending.xp + ' XP', '+' + this.pending.gold + ' OURO']
+        .forEach((l, i) => c.add(
+          this.add.text(W/2, H/2 - 95 + i*30, l, this.font(11,'#5ec05e')).setOrigin(0.5)));
+      if (this.pending.items.length) {
+        c.add(this.add.text(W/2, H/2 - 20, 'ITENS EXCLUSIVOS:', this.font(9,'#9aa8bd')).setOrigin(0.5));
+        this.pending.items.forEach((id, i) => {
+          const db = ITEM_DB[id];
+          c.add(this.add.text(W/2, H/2 + 8 + i*26,
+            '[' + db.raridade.toUpperCase() + '] ' + db.nome + '  ' + statLine(db.stats),
+            this.font(8, RARITY_COLOR[db.raridade])).setOrigin(0.5));
+        });
+      }
+    } else {
+      c.add(this.add.text(W/2, H/2 - 60,
+        'A masmorra termina sem recompensa.\nTudo o que foi acumulado se perdeu.',
+        this.font(9,'#9aa8bd')).setOrigin(0.5).setAlign('center'));
+    }
+
+    c.add(this.add.text(W/2, H/2 + 120, 'Retornando à expedição...',
+      this.font(8,'#9aa8bd')).setOrigin(0.5));
+    const btn = this.add.text(W/2, H/2 + 152, 'VOLTAR AGORA', this.font(10,'#5ec05e'))
+      .setOrigin(0.5).setPadding(10).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.scene.start('Expedition'));
+    c.add(btn);
+
+    this.time.delayedCall(5000, () => {
+      if (this.scene.isActive()) this.scene.start('Expedition');
+    });
+  }
+}
+
+/* ---------------------- BOOT -------------------------------------------- */
+new Phaser.Game({
+  type: Phaser.AUTO,
+  parent: 'game',
+  width: W, height: H,
+  backgroundColor: '#0b0a12',
+  pixelArt: true,
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  scene: [Lobby, Expedition, Dungeon],
+});
+</script>
+</body>
+</html>
