@@ -31,6 +31,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /expedition-runs/{id}/pause",       s.handlePauseExpedition)
 	mux.HandleFunc("POST /expedition-runs/{id}/resume",      s.handleResumeExpedition)
 	mux.HandleFunc("POST /expedition-runs/{id}/zone",        s.handleSwitchZone)
+	mux.HandleFunc("GET /characters/{id}/inventory",           s.handleGetInventory)
+	mux.HandleFunc("GET /characters/{id}/equipped",            s.handleGetEquipped)
+	mux.HandleFunc("POST /characters/{id}/equipment/{slot}",   s.handleEquip)
+	mux.HandleFunc("DELETE /characters/{id}/equipment/{slot}", s.handleUnequip)
 	return cors(mux)
 }
 
