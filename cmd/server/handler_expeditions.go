@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"game/internal/character"
 	"game/internal/expedition"
 
 	"github.com/jackc/pgx/v5"
@@ -517,5 +518,147 @@ func (s *server) handleSwitchZone(w http.ResponseWriter, r *http.Request) {
 			Character:      charResp,
 			Loot:           loot,
 		},
+	})
+}
+
+// ── POST /expedition-runs/{id}/complete ──────────────────────────────────────
+
+type completeExpeditionRequest struct {
+	XP    int      `json:"xp"`
+	Gold  int      `json:"gold"`
+	Items []string `json:"items"` // item_template IDs
+}
+
+type completeExpeditionResponse struct {
+	Character  characterResponse       `json:"character"`
+	ItemsAdded []inventoryItemResponse `json:"items_added"`
+}
+
+func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+
+	var req completeExpeditionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.XP < 0 || req.Gold < 0 {
+		writeError(w, http.StatusBadRequest, "xp and gold must be non-negative")
+		return
+	}
+
+	// Load run to get character_id and verify it's active
+	var charID string
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT character_id FROM expedition_runs
+		WHERE id = $1 AND status = 'active'
+	`, runID).Scan(&charID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "expedition run not found or already completed")
+		return
+	}
+	if err != nil {
+		log.Printf("complete expedition load run: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load run")
+		return
+	}
+
+	// Begin transaction
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		log.Printf("complete expedition begin tx: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Apply XP and gold, check level-up
+	sc, err := s.loadChar(r.Context(), charID)
+	if err != nil {
+		log.Printf("complete expedition load char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load character")
+		return
+	}
+	sc.c.XP += req.XP
+	sc.gold += req.Gold
+	character.CheckLevelUp(sc.c, character.NopLevelUpHandler{})
+
+	_, err = tx.Exec(r.Context(), `
+		UPDATE characters
+		SET xp = $1, xp_to_next = $2, level = $3, gold = $4,
+		    hp = $5, max_hp = $6, attack = $7, defense = $8, critical = $9, cdr = $10
+		WHERE id = $11
+	`, sc.c.XP, sc.c.XPToNext, sc.c.Level, sc.gold,
+		sc.c.HP, sc.c.MaxHP, sc.c.Attack, sc.c.Defense, sc.c.Critical, sc.c.CDR,
+		charID)
+	if err != nil {
+		log.Printf("complete expedition update char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update character")
+		return
+	}
+
+	// Add items to inventory
+	var itemsAdded []inventoryItemResponse
+	for _, templateID := range req.Items {
+		var item inventoryItemResponse
+		err := tx.QueryRow(r.Context(), `
+			INSERT INTO inventory_items (character_id, item_template_id)
+			VALUES ($1, $2)
+			RETURNING id, character_id, item_template_id
+		`, charID, templateID).Scan(&item.ID, &item.CharacterID, &item.ItemTemplateID)
+		if err != nil {
+			log.Printf("complete expedition insert item %s: %v", templateID, err)
+			writeError(w, http.StatusInternalServerError, "could not add item")
+			return
+		}
+		// Load template details
+		err = tx.QueryRow(r.Context(), `
+			SELECT id, name, slot, rarity, source,
+			       attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+			FROM item_templates WHERE id = $1
+		`, templateID).Scan(
+			&item.Template.ID, &item.Template.Name, &item.Template.Slot,
+			&item.Template.Rarity, &item.Template.Source,
+			&item.Template.AttackBonus, &item.Template.DefenseBonus, &item.Template.HPBonus,
+			&item.Template.CritBonus, &item.Template.CDRBonus,
+		)
+		if err != nil {
+			log.Printf("complete expedition load template %s: %v", templateID, err)
+			writeError(w, http.StatusInternalServerError, "could not load item template")
+			return
+		}
+		itemsAdded = append(itemsAdded, item)
+	}
+
+	// Mark run completed
+	_, err = tx.Exec(r.Context(), `
+		UPDATE expedition_runs SET status = 'completed' WHERE id = $1
+	`, runID)
+	if err != nil {
+		log.Printf("complete expedition mark completed: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not complete run")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("complete expedition commit: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction commit failed")
+		return
+	}
+
+	// Return effective character stats (with item bonuses)
+	scEff, err := s.loadCharEffective(r.Context(), charID)
+	if err != nil {
+		log.Printf("complete expedition reload char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not reload character")
+		return
+	}
+
+	if itemsAdded == nil {
+		itemsAdded = []inventoryItemResponse{}
+	}
+	writeJSON(w, http.StatusOK, completeExpeditionResponse{
+		Character:  scEff.toResponse(),
+		ItemsAdded: itemsAdded,
 	})
 }
