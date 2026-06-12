@@ -85,6 +85,47 @@ func (s *server) loadChar(ctx context.Context, id string) (*serverChar, error) {
 	return sc, nil
 }
 
+// loadEquipmentBonuses fetches the stat bonuses of all items equipped by character.
+func (s *server) loadEquipmentBonuses(ctx context.Context, charID string) ([]character.EquippedBonus, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT it.attack_bonus, it.defense_bonus, it.hp_bonus, it.crit_bonus, it.cdr_bonus
+		FROM equipment e
+		JOIN inventory_items ii ON ii.id = e.inventory_item_id
+		JOIN item_templates  it ON it.id = ii.item_template_id
+		WHERE e.character_id = $1
+		  AND e.inventory_item_id IS NOT NULL
+	`, charID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bonuses []character.EquippedBonus
+	for rows.Next() {
+		var b character.EquippedBonus
+		if err := rows.Scan(&b.AttackBonus, &b.DefenseBonus, &b.HPBonus,
+			&b.CritBonus, &b.CDRBonus); err != nil {
+			return nil, err
+		}
+		bonuses = append(bonuses, b)
+	}
+	return bonuses, rows.Err()
+}
+
+// loadCharEffective loads base char stats and applies all equipped item bonuses.
+func (s *server) loadCharEffective(ctx context.Context, id string) (*serverChar, error) {
+	sc, err := s.loadChar(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	bonuses, err := s.loadEquipmentBonuses(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	character.ApplyEquipment(sc.c, bonuses)
+	return sc, nil
+}
+
 // ── POST /characters ──────────────────────────────────────────────────────────
 
 type createCharacterRequest struct {
@@ -144,7 +185,7 @@ func (s *server) handleCreateCharacter(w http.ResponseWriter, r *http.Request) {
 // ── GET /characters/{id} ─────────────────────────────────────────────────────
 
 func (s *server) handleGetCharacter(w http.ResponseWriter, r *http.Request) {
-	sc, err := s.loadChar(r.Context(), r.PathValue("id"))
+	sc, err := s.loadCharEffective(r.Context(), r.PathValue("id"))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
