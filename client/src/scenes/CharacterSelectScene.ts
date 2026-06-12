@@ -45,7 +45,7 @@ export class CharacterSelectScene extends Phaser.Scene {
       bg.on('pointerout', () => bg.setFillStyle(0x222222))
       bg.on('pointerdown', () => {
         GameState.instance.character = char
-        this.scene.start('Hub')
+        this.scene.start('Lobby')
       })
     })
 

@@ -109,7 +109,7 @@ export class CharacterCreateScene extends Phaser.Scene {
       const char = await createCharacter(name, this.selectedClass)
       GameState.instance.character = char
       this.nameInput.destroy()
-      this.scene.start('Hub')
+      this.scene.start('Lobby')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
       this.errorText.setText('Error: ' + msg)

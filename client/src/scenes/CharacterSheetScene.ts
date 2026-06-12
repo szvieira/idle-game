@@ -64,7 +64,7 @@ export class CharacterSheetScene extends Phaser.Scene {
     const backBtn = this.add.rectangle(700, 40, 120, 36, 0x334455)
       .setStrokeStyle(1, 0x6688aa).setInteractive({ useHandCursor: true })
     this.add.text(700, 40, 'BACK', { font: '12px monospace', color: '#ffffff' }).setOrigin(0.5)
-    backBtn.on('pointerdown', () => this.scene.start('Hub'))
+    backBtn.on('pointerdown', () => this.scene.start('Lobby'))
 
     // Load data
     try {

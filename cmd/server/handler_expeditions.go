@@ -526,7 +526,7 @@ func (s *server) handleSwitchZone(w http.ResponseWriter, r *http.Request) {
 type completeExpeditionRequest struct {
 	XP    int      `json:"xp"`
 	Gold  int      `json:"gold"`
-	Items []string `json:"items"` // item_template IDs
+	Items []string `json:"items"` // item template names
 }
 
 type completeExpeditionResponse struct {
@@ -597,34 +597,37 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Add items to inventory
+	// Add items to inventory (looked up by template name; unknown names are skipped)
 	var itemsAdded []inventoryItemResponse
-	for _, templateID := range req.Items {
+	for _, itemName := range req.Items {
 		var item inventoryItemResponse
 		err := tx.QueryRow(r.Context(), `
-			INSERT INTO inventory_items (character_id, item_template_id)
-			VALUES ($1, $2)
-			RETURNING id, character_id, item_template_id
-		`, charID, templateID).Scan(&item.ID, &item.CharacterID, &item.ItemTemplateID)
-		if err != nil {
-			log.Printf("complete expedition insert item %s: %v", templateID, err)
-			writeError(w, http.StatusInternalServerError, "could not add item")
-			return
-		}
-		// Load template details
-		err = tx.QueryRow(r.Context(), `
 			SELECT id, name, slot, rarity, source,
 			       attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
-			FROM item_templates WHERE id = $1
-		`, templateID).Scan(
+			FROM item_templates WHERE name = $1
+		`, itemName).Scan(
 			&item.Template.ID, &item.Template.Name, &item.Template.Slot,
 			&item.Template.Rarity, &item.Template.Source,
 			&item.Template.AttackBonus, &item.Template.DefenseBonus, &item.Template.HPBonus,
 			&item.Template.CritBonus, &item.Template.CDRBonus,
 		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("complete expedition unknown item %q, skipping", itemName)
+			continue
+		}
 		if err != nil {
-			log.Printf("complete expedition load template %s: %v", templateID, err)
+			log.Printf("complete expedition load template %q: %v", itemName, err)
 			writeError(w, http.StatusInternalServerError, "could not load item template")
+			return
+		}
+		err = tx.QueryRow(r.Context(), `
+			INSERT INTO inventory_items (character_id, item_template_id)
+			VALUES ($1, $2)
+			RETURNING id, character_id, item_template_id
+		`, charID, item.Template.ID).Scan(&item.ID, &item.CharacterID, &item.ItemTemplateID)
+		if err != nil {
+			log.Printf("complete expedition insert item %q: %v", itemName, err)
+			writeError(w, http.StatusInternalServerError, "could not add item")
 			return
 		}
 		itemsAdded = append(itemsAdded, item)

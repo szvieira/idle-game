@@ -418,3 +418,116 @@ func (s *server) handleClaimDungeonRun(w http.ResponseWriter, r *http.Request) {
 		Loot:      loot,
 	})
 }
+
+// ── POST /dungeon-complete ────────────────────────────────────────────────────
+
+type completeDungeonRequest struct {
+	CharacterID string   `json:"character_id"`
+	XP          int      `json:"xp"`
+	Gold        int      `json:"gold"`
+	Items       []string `json:"items"` // item template names
+}
+
+func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
+	var req completeDungeonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CharacterID == "" {
+		writeError(w, http.StatusBadRequest, "character_id required")
+		return
+	}
+	if req.XP < 0 || req.Gold < 0 {
+		writeError(w, http.StatusBadRequest, "xp and gold must be non-negative")
+		return
+	}
+
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		log.Printf("complete dungeon begin tx: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	sc, err := s.loadChar(r.Context(), req.CharacterID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "character not found")
+		return
+	}
+	if err != nil {
+		log.Printf("complete dungeon load char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load character")
+		return
+	}
+	sc.c.XP += req.XP
+	sc.gold += req.Gold
+	character.CheckLevelUp(sc.c, character.NopLevelUpHandler{})
+
+	_, err = tx.Exec(r.Context(), `
+		UPDATE characters
+		SET xp=$1, xp_to_next=$2, level=$3, gold=$4,
+		    hp=$5, max_hp=$6, attack=$7, defense=$8, critical=$9, cdr=$10
+		WHERE id=$11
+	`, sc.c.XP, sc.c.XPToNext, sc.c.Level, sc.gold,
+		sc.c.HP, sc.c.MaxHP, sc.c.Attack, sc.c.Defense, sc.c.Critical, sc.c.CDR,
+		req.CharacterID)
+	if err != nil {
+		log.Printf("complete dungeon update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update character")
+		return
+	}
+
+	// Add items by template name; unknown names are skipped
+	var itemsAdded []inventoryItemResponse
+	for _, itemName := range req.Items {
+		var item inventoryItemResponse
+		err := tx.QueryRow(r.Context(), `
+			SELECT id, name, slot, rarity, source,
+			       attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+			FROM item_templates WHERE name = $1
+		`, itemName).Scan(
+			&item.Template.ID, &item.Template.Name, &item.Template.Slot,
+			&item.Template.Rarity, &item.Template.Source,
+			&item.Template.AttackBonus, &item.Template.DefenseBonus, &item.Template.HPBonus,
+			&item.Template.CritBonus, &item.Template.CDRBonus,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("complete dungeon unknown item %q, skipping", itemName)
+			continue
+		}
+		if err != nil {
+			log.Printf("complete dungeon load template %q: %v", itemName, err)
+			writeError(w, http.StatusInternalServerError, "could not load item template")
+			return
+		}
+		err = tx.QueryRow(r.Context(), `
+			INSERT INTO inventory_items (character_id, item_template_id)
+			VALUES ($1, $2)
+			RETURNING id, character_id, item_template_id
+		`, req.CharacterID, item.Template.ID).Scan(&item.ID, &item.CharacterID, &item.ItemTemplateID)
+		if err != nil {
+			log.Printf("complete dungeon insert item %q: %v", itemName, err)
+			writeError(w, http.StatusInternalServerError, "could not add item")
+			return
+		}
+		itemsAdded = append(itemsAdded, item)
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("complete dungeon commit: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction commit failed")
+		return
+	}
+
+	scEff, err := s.loadCharEffective(r.Context(), req.CharacterID)
+	if err != nil {
+		log.Printf("complete dungeon reload char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not reload character")
+		return
+	}
+	if itemsAdded == nil {
+		itemsAdded = []inventoryItemResponse{}
+	}
+	writeJSON(w, http.StatusOK, completeExpeditionResponse{
+		Character:  scEff.toResponse(),
+		ItemsAdded: itemsAdded,
+	})
+}

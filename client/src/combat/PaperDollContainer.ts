@@ -63,6 +63,17 @@ export class PaperDollContainer {
   get x(): number { return this.container.x }
   get y(): number { return this.container.y }
 
+  // Tween-friendly accessors (Phaser tweens read/write these directly)
+  get angle(): number { return this.container.angle }
+  set angle(v: number) { this.container.setAngle(v) }
+  get alpha(): number { return this.container.alpha }
+  set alpha(v: number) { this.container.setAlpha(v) }
+
+  setAngle(angle: number): this {
+    this.container.setAngle(angle)
+    return this
+  }
+
   destroy(): void {
     this.container.destroy(true)
   }
