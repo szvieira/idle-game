@@ -120,6 +120,10 @@ export class LobbyScene extends Phaser.Scene {
     // Character sheet board (left-center)
     this.addPOI({ x:382, y:390, r:50, color:0x9aa8bd, label:'CHARACTER',
       onEnter: () => this.scene.start('CharacterSheet') })
+
+    // Raid portal (temporary solo launch until party lobby UI exists)
+    this.addPOI({ x:510, y:365, r:45, color:0xff4d6d, label:'RAID',
+      onEnter: () => void this.startRaid() })
   }
 
   private buildTopUI(): void {
@@ -198,6 +202,24 @@ export class LobbyScene extends Phaser.Scene {
     entry.sprite.destroy()
     entry.label.destroy()
     this.otherPlayers.delete(id)
+  }
+
+  private async startRaid(): Promise<void> {
+    const char = GameState.instance.character
+    if (!char) { this.locked = false; return }
+
+    try {
+      const resp = await fetch('http://localhost:8080/raid-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character_id: char.id }),
+      })
+      if (!resp.ok) throw new Error(await resp.text())
+      const data = await resp.json() as { run_id: string }
+      this.scene.start('Raid', { runId: data.run_id })
+    } catch {
+      this.locked = false
+    }
   }
 
   update(_time: number, delta: number): void {

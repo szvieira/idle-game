@@ -45,16 +45,18 @@ Branch: `feat/expedition-combat-visualization`
 - `client/src/scenes/LobbyScene.ts` — broadcasts hero position, renders other players with interpolation, cleans up on shutdown
 - Verification: `go test ./...`, `go build ./...`, `npm run typecheck`, `npm run test`, `npm run build`
 
-## TODO (continue here)
+### Slice 6 — Raids ✓
+- `internal/raid/types.go` — raid input/state/damage/end message types
+- `internal/raid/engine.go` — 20Hz server-authoritative engine, boss, movement, attacks, skills, state broadcast
+- `cmd/server/handler_raids.go` — POST `/raid-runs`, GET `/ws/raid`; supports existing `lobby_id` and temporary `{ character_id }` solo launch
+- `cmd/server/main.go` — raid engine registry (`raidsMu`, `raids`) + routes
+- `client/src/net/raid-types.ts` + `RaidSocket.ts` — raid protocol wrapper + tests
+- `client/src/scenes/RaidScene.ts` — renders server state, sends move/skill input, damage text, end state
+- `client/src/scenes/LobbyScene.ts` — raid POI launches temporary solo raid from current character
+- Verification: `go test ./...`, `go build ./...`, `npm run typecheck`, `npm run test`, `npm run build`
+- Deviation from plan: plan's `test-lobby` placeholder would violate the real FK-backed `raid_runs.lobby_id`; server now creates a valid temporary lobby from `character_id` for immediate testing.
 
-### Slice 6 — Raids (plan: `2026-06-12-v6-slice6-raids.md`, Tasks 28-31, NOT started)
-1. `internal/raid/types.go` — message types
-2. `internal/raid/engine.go` — 20Hz server-authoritative engine
-3. `cmd/server/handler_raids.go` — POST /raid-runs, GET /ws/raid; server struct gets `raidsMu`+`raids map[string]*raid.Engine`
-4. `client/src/net/raid-types.ts` + `RaidSocket.ts`
-5. `client/src/scenes/RaidScene.ts` — renders server state; register in main.ts
-6. LobbyScene raid POI (plan uses test fetch to /raid-runs)
-Note: plan's raid engine references `sc.name`/`sc.c` from loadCharEffective — matches existing `serverChar` struct. Check `raid_runs` table schema (000009) before INSERT — plan assumes `(lobby_id, status)` columns.
+## All 6 slices complete ✓
 
 ### After all slices
 - Run migrations against DB (just start server: `go run ./cmd/server`, needs `docker compose up -d` for Postgres)

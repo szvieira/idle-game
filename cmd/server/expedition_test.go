@@ -12,6 +12,7 @@ import (
 
 	"game/internal/db"
 	"game/internal/presence"
+	"game/internal/raid"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -33,7 +34,7 @@ func TestMain(m *testing.M) {
 	if err := db.Migrate(ctx, pool); err != nil {
 		panic("run migrations: " + err.Error())
 	}
-	testServer = &server{pool: pool, hub: presence.NewHub()}
+	testServer = &server{pool: pool, hub: presence.NewHub(), raids: make(map[string]*raid.Engine)}
 	code := m.Run()
 	pool.Close()
 	os.Exit(code)
@@ -75,6 +76,14 @@ func createChar(t *testing.T, class string) string {
 
 func cleanupChar(t *testing.T, charID string) {
 	t.Helper()
+	testServer.pool.Exec(context.Background(), `
+		DELETE FROM raid_runs rr
+		USING raid_lobbies rl
+		WHERE rr.lobby_id = rl.id
+		  AND rl.leader_character_id = $1
+	`, charID)
+	testServer.pool.Exec(context.Background(),
+		`DELETE FROM raid_lobbies WHERE leader_character_id = $1`, charID)
 	testServer.pool.Exec(context.Background(),
 		`DELETE FROM characters WHERE id = $1`, charID)
 }

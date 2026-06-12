@@ -6,6 +6,7 @@ import { LobbyScene } from './scenes/LobbyScene'
 import { CharacterSheetScene } from './scenes/CharacterSheetScene'
 import { ExpeditionScene } from './scenes/ExpeditionScene'
 import { DungeonScene } from './scenes/DungeonScene'
+import { RaidScene } from './scenes/RaidScene'
 
 new Phaser.Game({
   type: Phaser.AUTO,
@@ -22,5 +23,6 @@ new Phaser.Game({
     CharacterSheetScene,
     ExpeditionScene,
     DungeonScene,
+    RaidScene,
   ],
 })
