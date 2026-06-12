@@ -71,3 +71,32 @@ export interface SwitchZoneResult {
   zone_name: string
   collect: CollectResult
 }
+
+export interface ItemTemplate {
+  id: string
+  name: string
+  slot: 'Helmet' | 'Armor' | 'Weapon' | 'Boots' | 'Ring' | 'Amulet'
+  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic'
+  source: 'expedition' | 'dungeon'
+  attack_bonus: number
+  defense_bonus: number
+  hp_bonus: number
+  crit_bonus: number
+  cdr_bonus: number
+}
+
+export interface InventoryItem {
+  id: string
+  character_id: string
+  item_template_id: string
+  template: ItemTemplate
+}
+
+export type EquipmentSlot = 'Helmet' | 'Armor' | 'Weapon' | 'Boots' | 'Ring' | 'Amulet'
+
+export type EquippedSlots = Partial<Record<EquipmentSlot, InventoryItem>>
+
+export interface CompleteExpeditionResult {
+  character: Character
+  items_added: InventoryItem[]
+}
