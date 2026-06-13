@@ -28,6 +28,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /accounts", s.handleCreateAccount)
 	mux.HandleFunc("POST /characters", s.handleCreateCharacter)
 	mux.HandleFunc("GET /characters/{id}", s.handleGetCharacter)
+	mux.HandleFunc("GET /dungeon-definitions", s.handleListDungeons)
 	mux.HandleFunc("POST /dungeon-runs", s.handleCreateDungeonRun)
 	mux.HandleFunc("GET /dungeon-runs/{id}", s.handleGetDungeonRun)
 	mux.HandleFunc("POST /dungeon-runs/{id}/claim", s.handleClaimDungeonRun)

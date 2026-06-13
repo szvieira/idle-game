@@ -15,6 +15,39 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ── GET /dungeon-definitions ──────────────────────────────────────────────────
+
+type dungeonDefResponse struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	MinLevel int    `json:"min_level"`
+	Floors   int    `json:"floors"`
+}
+
+func (s *server) handleListDungeons(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.pool.Query(r.Context(),
+		`SELECT id, name, min_level, floors FROM dungeon_definitions ORDER BY min_level`)
+	if err != nil {
+		log.Printf("list dungeons: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not list dungeons")
+		return
+	}
+	defer rows.Close()
+
+	var defs []dungeonDefResponse
+	for rows.Next() {
+		var d dungeonDefResponse
+		if err := rows.Scan(&d.ID, &d.Name, &d.MinLevel, &d.Floors); err != nil {
+			continue
+		}
+		defs = append(defs, d)
+	}
+	if defs == nil {
+		defs = []dungeonDefResponse{}
+	}
+	writeJSON(w, http.StatusOK, defs)
+}
+
 // ── Payload types (stored as JSONB in dungeon_rewards) ────────────────────────
 
 type rewardItem struct {

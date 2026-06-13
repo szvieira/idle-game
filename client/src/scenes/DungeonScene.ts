@@ -11,9 +11,16 @@ const TOTAL_ROOMS       = 6
 
 export class DungeonScene extends BaseCombat {
   private roomIndex = 0
+  private dungeonId   = 'forsaken_crypt'
+  private dungeonLabel = 'The Forsaken Crypt'
   private txtRoom!: Phaser.GameObjects.Text
 
   constructor() { super({ key: 'Dungeon' }) }
+
+  init(data?: { dungeonId?: string; dungeonName?: string }): void {
+    this.dungeonId    = data?.dungeonId   ?? 'forsaken_crypt'
+    this.dungeonLabel = data?.dungeonName ?? 'The Forsaken Crypt'
+  }
 
   create(): void {
     const char = GameState.instance.character
@@ -30,6 +37,7 @@ export class DungeonScene extends BaseCombat {
     this.setupInput()
     this.buildCoreHUD()
     this.txtRoom = this.add.text(16, 14, '', this.font(13,'#c45aff')).setDepth(20)
+    this.add.text(16, 38, this.dungeonLabel.toUpperCase(), this.font(7,'#6a3a8a')).setDepth(20)
     this.refreshCoreHUD()
     this.spawnDungeonRoom()
   }
@@ -57,7 +65,7 @@ export class DungeonScene extends BaseCombat {
       this.enemies[0].barW = 80
       this.enemies[0].barOff = 60
     }
-    this.txtRoom.setText(isBoss ? 'BOSS ROOM' : `CRYPT ROOM ${this.roomIndex+1}/${TOTAL_ROOMS}`)
+    this.txtRoom.setText(isBoss ? 'BOSS ROOM' : `ROOM ${this.roomIndex+1}/${TOTAL_ROOMS}`)
   }
 
   protected onEnemyKilled(e: EnemyState): void {

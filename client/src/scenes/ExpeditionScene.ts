@@ -1,9 +1,11 @@
 import Phaser from 'phaser'
-import { BaseCombat, ENEMY_TYPES } from './BaseCombat'
+import { BaseCombat, ENEMY_TYPES, FONT, W, H } from './BaseCombat'
 import type { EnemyState } from './BaseCombat'
 import { GameState } from '../state/GameState'
 import { completeExpedition } from '../api/items'
 import { startExpedition } from '../api/expedition'
+import { getDungeons } from '../api/dungeons'
+import type { DungeonDef } from '../api/dungeons'
 
 const DROP_CHANCE   = 0.10
 const UNCOMMON_ODDS = 0.25 // at zone >= 2
@@ -11,6 +13,18 @@ const UNCOMMON_ODDS = 0.25 // at zone >= 2
 const EXPEDITION_ITEM_POOLS: Record<string, string[]> = {
   Common:   ['Iron Sword','Leather Chestplate','Leather Boots','Copper Ring'],
   Uncommon: ["Soldier's Sword","Scout's Helm",'Quartz Amulet'],
+}
+
+const ZONE_NAMES: Record<number, string> = {
+  1: 'Forest',
+  2: 'Ruins',
+  3: 'Shadow Cavern',
+  4: 'Obsidian Wastes',
+  5: 'Void Depths',
+  6: 'Abyssal Reaches',
+}
+function zoneName(z: number): string {
+  return ZONE_NAMES[z] ?? `The Beyond`
 }
 
 export class ExpeditionScene extends BaseCombat {
@@ -42,7 +56,7 @@ export class ExpeditionScene extends BaseCombat {
     this.setupInput()
     this.buildCoreHUD()
     this.txtZone = this.add.text(16, 14, '', this.font(13,'#ffd34d')).setDepth(20)
-    this.txtRoom = this.add.text(16, 38, '', this.font(10)).setDepth(20)
+    this.txtRoom = this.add.text(16, 38, '', this.font(9,'#aabbcc')).setDepth(20)
     this.refreshCoreHUD()
     this.spawnRoom()
   }
@@ -52,8 +66,8 @@ export class ExpeditionScene extends BaseCombat {
   protected menuOptions() {
     return [
       { label:'CONTINUE EXPEDITION', color:'#5ec05e', onPick: () => { /* close menu */ } },
-      { label:'DUNGEON: FORSAKEN CRYPT', color:'#c45aff', onPick: () => this.exitTo('Dungeon') },
-      { label:'BACK TO CAMP', onPick: () => this.exitTo('Lobby') },
+      { label:'ENTER DUNGEON', color:'#c45aff', onPick: () => void this.exitToDungeon() },
+      { label:'BACK TO CAMP', onPick: () => void this.exitTo('Lobby') },
     ]
   }
 
@@ -62,7 +76,7 @@ export class ExpeditionScene extends BaseCombat {
     const total = 5 + Math.min(this.room, 3)
     const pool  = ENEMY_TYPES.slice(0, Math.min(1 + this.room, 3))
     this.enemies = this.spawnPacks(total, scale, pool)
-    this.txtZone.setText(`ZONE ${this.zone}`)
+    this.txtZone.setText(`ZONE ${this.zone}  —  ${zoneName(this.zone).toUpperCase()}`)
     this.txtRoom.setText(`ROOM ${this.room}/3  •  ${this.enemies.length} ENEMIES`)
   }
 
@@ -85,8 +99,12 @@ export class ExpeditionScene extends BaseCombat {
 
   protected onRoomCleared(): void {
     const zoneDone = this.room === 3
-    this.banner(zoneDone ? `ZONE ${this.zone} COMPLETE!` : 'ROOM CLEAR!',
-      zoneDone ? '#ffd34d' : '#5ec05e')
+    if (zoneDone) {
+      const next = zoneName(this.zone + 1)
+      this.banner(`ZONE ${this.zone} CLEAR  →  ${next.toUpperCase()}`, '#ffd34d')
+    } else {
+      this.banner('ROOM CLEAR!', '#5ec05e')
+    }
     this.spawnPortal()
   }
 
@@ -107,13 +125,51 @@ export class ExpeditionScene extends BaseCombat {
     this.busy = true
     this.banner('DEFEAT...', '#c03a3a')
     this.tweens.add({ targets:this.hero.doll, angle:-90, alpha:0.4, duration:400 })
-    this.time.delayedCall(2000, () => this.finishSession())
+    this.time.delayedCall(2000, () => void this.finishSession())
   }
 
   private async exitTo(scene: string): Promise<void> {
     this.menuOpen = false
     await this.reportSession()
     this.scene.start(scene)
+  }
+
+  private async exitToDungeon(): Promise<void> {
+    this.menuOpen = false
+    await this.reportSession()
+    this.showDungeonSelect()
+  }
+
+  private showDungeonSelect(): void {
+    const char = GameState.instance.character
+    if (!char) return
+
+    const overlay = this.add.container(0, 0).setDepth(80)
+    overlay.add(this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.85))
+    overlay.add(this.add.text(W/2, 70, 'SELECT DUNGEON', {
+      fontFamily: FONT, fontSize: '14px', color: '#c45aff', stroke: '#000', strokeThickness: 4,
+    }).setOrigin(0.5))
+
+    const loading = this.add.text(W/2, 200, 'Loading…', {
+      fontFamily: FONT, fontSize: '9px', color: '#888899', stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5)
+    overlay.add(loading)
+
+    const cancelBtn = this.add.rectangle(W/2, H - 60, 160, 34, 0x2a2235)
+      .setStrokeStyle(1, 0x555566).setInteractive({ useHandCursor: true })
+    overlay.add(cancelBtn)
+    overlay.add(this.add.text(W/2, H - 60, 'BACK TO CAMP', {
+      fontFamily: FONT, fontSize: '8px', color: '#888899', stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5))
+    cancelBtn.on('pointerdown', () => { overlay.destroy(); this.scene.start('Lobby') })
+
+    void getDungeons().then(defs => {
+      loading.destroy()
+      buildDungeonList(this, overlay, defs, char.level, (d) => {
+        overlay.destroy()
+        this.scene.start('Dungeon', { dungeonId: d.id, dungeonName: d.name, minLevel: d.min_level })
+      })
+    }).catch(() => { loading.setText('Could not load dungeons') })
   }
 
   private async finishSession(): Promise<void> {
@@ -131,4 +187,47 @@ export class ExpeditionScene extends BaseCombat {
       GameState.instance.expeditionRun = null
     } catch { /* best-effort */ }
   }
+}
+
+export function buildDungeonList(
+  scene: Phaser.Scene,
+  overlay: Phaser.GameObjects.Container,
+  defs: DungeonDef[],
+  charLevel: number,
+  onSelect: (d: DungeonDef) => void,
+): void {
+  const startY = 130
+  const rowH   = 72
+
+  defs.forEach((d, i) => {
+    const y      = startY + i * rowH
+    const locked = charLevel < d.min_level
+    const stroke = locked ? 0x444455 : 0xc45aff
+    const textCol = locked ? '#555566' : '#e8e2d0'
+    const subCol  = locked ? '#444455' : '#9aa8bd'
+
+    const bg = scene.add.rectangle(W/2, y + rowH/2 - 8, 500, 60, 0x0d0a1a)
+      .setStrokeStyle(2, stroke)
+    overlay.add(bg)
+
+    if (!locked) {
+      bg.setInteractive({ useHandCursor: true })
+        .on('pointerover',  () => bg.setFillStyle(0x1a1428))
+        .on('pointerout',   () => bg.setFillStyle(0x0d0a1a))
+        .on('pointerdown',  () => onSelect(d))
+    }
+
+    overlay.add(scene.add.text(W/2 - 220, y + rowH/2 - 20, d.name.toUpperCase(), {
+      fontFamily: FONT, fontSize: '10px', color: textCol, stroke: '#000', strokeThickness: 3,
+    }))
+    overlay.add(scene.add.text(W/2 - 220, y + rowH/2 + 2, `Lv.${d.min_level}+ REQUIRED  •  ${d.floors} FLOORS`, {
+      fontFamily: FONT, fontSize: '7px', color: subCol, stroke: '#000', strokeThickness: 2,
+    }))
+
+    if (locked) {
+      overlay.add(scene.add.text(W/2 + 130, y + rowH/2 - 8, 'LOCKED', {
+        fontFamily: FONT, fontSize: '8px', color: '#443355', stroke: '#000', strokeThickness: 2,
+      }).setOrigin(0.5))
+    }
+  })
 }

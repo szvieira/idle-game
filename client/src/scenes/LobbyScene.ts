@@ -5,6 +5,8 @@ import { VISUAL_SLOTS } from '../combat/sprites'
 import { PresenceSocket } from '../net/PresenceSocket'
 import { getInventory, getEquipped, equipItem, unequipItem } from '../api/items'
 import { getSkills, unlockSkill, equipSkill } from '../api/skills'
+import { getDungeons } from '../api/dungeons'
+import { buildDungeonList } from './ExpeditionScene'
 import { W, H, FONT } from './BaseCombat'
 import type { EquipmentSlot, InventoryItem } from '../types/api'
 import type { PlayerSnap } from '../net/PresenceSocket'
@@ -162,7 +164,7 @@ export class LobbyScene extends Phaser.Scene {
     g.fillStyle(0x0b0a12, 1); g.fillRect(103,270,60,72)
     g.fillStyle(0x3a2a4a, 1); g.fillTriangle(78,244,133,208,188,244)
     this.addPOI({ x:133, y:390, r:55, color:0xc45aff, label:'DUNGEON',
-      onEnter: () => this.scene.start('Dungeon') })
+      onEnter: () => void this.openDungeonSelect() })
 
     this.addPOI({ x:640, y:416, r:50, color:0xffd34d, label:'SHOP',
       onEnter: () => this.openShop() })
@@ -597,6 +599,38 @@ export class LobbyScene extends Phaser.Scene {
     entry.doll.destroy()
     entry.label.destroy()
     this.otherPlayers.delete(id)
+  }
+
+  // ── Dungeon select dialog ─────────────────────────────────────────────────────
+
+  private async openDungeonSelect(): Promise<void> {
+    const char = GameState.instance.character
+    if (!char) return
+
+    const overlay = this.add.container(0, 0).setDepth(60)
+    overlay.add(this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.85))
+    overlay.add(this.add.text(W/2, 60, 'SELECT DUNGEON', this.font(14, '#c45aff')).setOrigin(0.5))
+    overlay.add(this.add.text(W/2, 90, 'Choose your challenge', this.font(7, '#9aa8bd')).setOrigin(0.5))
+
+    const loading = this.add.text(W/2, 200, 'Loading…', this.font(9, '#888899')).setOrigin(0.5)
+    overlay.add(loading)
+
+    const closeBtn = this.add.rectangle(W/2, H - 55, 160, 34, 0x2a2235)
+      .setStrokeStyle(1, 0x555566).setInteractive({ useHandCursor: true })
+    overlay.add(closeBtn)
+    overlay.add(this.add.text(W/2, H - 55, 'CANCEL', this.font(9, '#888899')).setOrigin(0.5))
+    closeBtn.on('pointerdown', () => { overlay.destroy(); this.resetHeroToCenter() })
+
+    try {
+      const defs = await getDungeons()
+      loading.destroy()
+      buildDungeonList(this, overlay, defs, char.level, (d) => {
+        overlay.destroy()
+        this.scene.start('Dungeon', { dungeonId: d.id, dungeonName: d.name, minLevel: d.min_level })
+      })
+    } catch {
+      loading.setText('Could not load dungeons')
+    }
   }
 
   // ── Raid dialog ──────────────────────────────────────────────────────────────
