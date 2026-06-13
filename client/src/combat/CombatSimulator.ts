@@ -45,7 +45,10 @@ export function simulateLoop(charStats: CombatChar, zone: ZoneDef): CombatEvent[
       events.push({ type: 'enemy_intro', name: enemyDef.name, hp: enemyDef.hp, maxHp: enemyDef.hp })
 
       for (let tick = 1; ; tick++) {
-        if (c.class === 'Priest' && c.hp < c.maxHp / 2 && cdTimer === 0) {
+        if (c.class === 'Paladin' && cdTimer === 0) {
+          // Holy Smite: deals damage and heals self
+          const [dmg, isCrit] = calcDamage(Math.floor(c.attack * c.specialMult), enemyDef.defense, c.critical)
+          enemyHp -= dmg
           let healed = c.specialHeal
           c.hp += healed
           if (c.hp > c.maxHp) {
@@ -53,8 +56,9 @@ export function simulateLoop(charStats: CombatChar, zone: ZoneDef): CombatEvent[
             c.hp = c.maxHp
           }
           cdTimer = c.specialCd
+          events.push({ type: 'player_attack', damage: dmg, isCrit, isSpecial: true, specialName: c.specialName, targetName: enemyDef.name, enemyHp: Math.max(0, enemyHp), enemyMaxHp: enemyDef.hp, playerHp: c.hp, playerMaxHp: c.maxHp })
           events.push({ type: 'player_heal', amount: healed, specialName: c.specialName, playerHp: c.hp, playerMaxHp: c.maxHp })
-        } else if (c.class !== 'Priest' && cdTimer === 0) {
+        } else if (c.class !== 'Paladin' && cdTimer === 0) {
           const [dmg, isCrit] = calcDamage(Math.floor(c.attack * c.specialMult), enemyDef.defense, c.critical)
           enemyHp -= dmg
           cdTimer = c.specialCd

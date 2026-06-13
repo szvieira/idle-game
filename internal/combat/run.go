@@ -25,7 +25,10 @@ func RunCombat(c *character.Character, e *Enemy, stats *RoomStats, isBoss bool, 
 		stats.Ticks++
 
 		switch {
-		case c.Class == "Priest" && c.HP < c.MaxHP/2 && c.SpecialCDTimer == 0:
+		case c.Class == "Paladin" && c.SpecialCDTimer == 0:
+			// Holy Smite: deals moderate damage and heals self
+			dmg, isCrit := CalcDamage(rng, int(float64(c.Attack)*c.SpecialMult), e.Defense, c.Critical)
+			e.HP -= dmg
 			healed := c.SpecialHeal
 			c.HP += healed
 			if c.HP > c.MaxHP {
@@ -33,10 +36,12 @@ func RunCombat(c *character.Character, e *Enemy, stats *RoomStats, isBoss bool, 
 				c.HP = c.MaxHP
 			}
 			c.SpecialCDTimer = c.SpecialCD
+			stats.DamageDealt += dmg
 			stats.HealingReceived += healed
+			h.OnPlayerAttack(dmg, isCrit, true, c.SpecialName, e.Name, max(0, e.HP), e.MaxHP, c.HP, c.MaxHP)
 			h.OnPlayerHeal(healed, c.SpecialName, c.HP, c.MaxHP)
 
-		case c.Class != "Priest" && c.SpecialCDTimer == 0:
+		case c.Class != "Paladin" && c.SpecialCDTimer == 0:
 			dmg, isCrit := CalcDamage(rng, int(float64(c.Attack)*c.SpecialMult), e.Defense, c.Critical)
 			e.HP -= dmg
 			c.SpecialCDTimer = c.SpecialCD

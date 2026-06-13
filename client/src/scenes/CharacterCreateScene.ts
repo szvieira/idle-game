@@ -5,7 +5,7 @@ import { GameState } from '../state/GameState'
 const CLASSES = [
   { cls: 'Warrior', role: 'Tank / Melee DPS', desc: 'High HP and defense' },
   { cls: 'Mage',    role: 'Ranged DPS',       desc: 'High attack and crit' },
-  { cls: 'Priest',  role: 'Support / Healer', desc: 'High mana and CDR' },
+  { cls: 'Paladin', role: 'Tank / Support',    desc: 'High HP, DEF, and self-heals' },
 ] as const
 
 export class CharacterCreateScene extends Phaser.Scene {

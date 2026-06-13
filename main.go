@@ -178,8 +178,8 @@ func selectClass() *character.Character {
 		fmt.Printf("         Special: Brutal Strike (2.2× dmg, CD:4)\n\n")
 		fmt.Printf("  %s[2] Mage%s     HP:140  ATK:48  DEF:10%%  CRIT:15%%\n", bold, reset)
 		fmt.Printf("         Special: Fireball (2.5× dmg, CD:3)\n\n")
-		fmt.Printf("  %s[3] Priest%s   HP:200  ATK:18  DEF:20%%  CRIT:5%%\n", bold, reset)
-		fmt.Printf("         Special: Heal (+55 HP, activates below 50%% HP, CD:2)\n\n")
+		fmt.Printf("  %s[3] Paladin%s  HP:260  ATK:24  DEF:28%%  CRIT:5%%\n", bold, reset)
+		fmt.Printf("         Special: Holy Smite (1.5× dmg + 45 HP heal, CD:3)\n\n")
 		fmt.Print("> ")
 		input, _ := reader.ReadString('\n')
 		switch strings.TrimSpace(input) {
@@ -188,7 +188,7 @@ func selectClass() *character.Character {
 		case "2":
 			return character.NewMage()
 		case "3":
-			return character.NewPriest()
+			return character.NewPaladin()
 		default:
 			fmt.Print("\nInvalid choice. Enter 1, 2, or 3.\n\n")
 		}

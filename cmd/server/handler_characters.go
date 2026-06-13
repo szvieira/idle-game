@@ -183,10 +183,10 @@ func (s *server) handleCreateCharacter(w http.ResponseWriter, r *http.Request) {
 		c = character.NewWarrior()
 	case "Mage":
 		c = character.NewMage()
-	case "Priest":
-		c = character.NewPriest()
+	case "Paladin":
+		c = character.NewPaladin()
 	default:
-		writeError(w, http.StatusBadRequest, "class must be Warrior, Mage, or Priest")
+		writeError(w, http.StatusBadRequest, "class must be Warrior, Mage, or Paladin")
 		return
 	}
 

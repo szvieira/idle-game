@@ -1,7 +1,7 @@
 export interface Character {
   id: string
   name: string
-  class: 'Warrior' | 'Mage' | 'Priest'
+  class: 'Warrior' | 'Mage' | 'Paladin'
   level: number
   xp: number
   xp_to_next: number

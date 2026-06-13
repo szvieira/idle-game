@@ -20,13 +20,13 @@ func NewMage() *Character {
 	}
 }
 
-func NewPriest() *Character {
+func NewPaladin() *Character {
 	return &Character{
-		Class: "Priest", Level: 10, XP: 0, XPToNext: 100,
-		HP: 200, MaxHP: 200,
-		Attack: 18, Defense: 20, Critical: 5, CDR: 30,
-		SpecialName: "Heal", SpecialHeal: 55,
-		SpecialCD: EffectiveCD(3, 30),
+		Class: "Paladin", Level: 10, XP: 0, XPToNext: 100,
+		HP: 260, MaxHP: 260,
+		Attack: 24, Defense: 28, Critical: 5, CDR: 20,
+		SpecialName: "Holy Smite", SpecialMult: 1.5, SpecialHeal: 45,
+		SpecialCD: EffectiveCD(4, 20),
 	}
 }
 
@@ -37,8 +37,8 @@ func ApplyClassSkills(c *Character) {
 		tmpl = NewWarrior()
 	case "Mage":
 		tmpl = NewMage()
-	case "Priest":
-		tmpl = NewPriest()
+	case "Paladin":
+		tmpl = NewPaladin()
 	default:
 		return
 	}
