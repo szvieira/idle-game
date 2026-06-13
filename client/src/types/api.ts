@@ -83,6 +83,7 @@ export interface ItemTemplate {
   hp_bonus: number
   crit_bonus: number
   cdr_bonus: number
+  class_restriction?: string | null
 }
 
 export interface InventoryItem {

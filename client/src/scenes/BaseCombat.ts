@@ -132,7 +132,7 @@ export abstract class BaseCombat extends Phaser.Scene {
     const skills = GameState.instance.skills
     this.skill = SKILLS[skills.equipped_skill] ?? SKILLS['whirlwind']
 
-    const doll = new PaperDollContainer(this, 130, 360)
+    const doll = new PaperDollContainer(this, 130, 360, char.class)
     doll.setDepth(3)
     // Apply equipped items to doll
     for (const [slot, item] of Object.entries(GameState.instance.equipped)) {

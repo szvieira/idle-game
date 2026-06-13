@@ -32,7 +32,7 @@ func (h *Hub) SendSnapshotTo(newClient *Client) {
 			continue
 		}
 		players = append(players, PlayerSnap{
-			ID: c.CharID, Name: c.Name,
+			ID: c.CharID, Name: c.Name, Class: c.Class,
 			X: c.X, Y: c.Y, Anim: c.Anim,
 			Equipped: c.Equipped,
 		})
@@ -84,6 +84,7 @@ type PosMsg struct {
 	X        float64           `json:"x"`
 	Y        float64           `json:"y"`
 	Anim     string            `json:"anim"`
+	Class    string            `json:"cls,omitempty"`
 	Equipped map[string]string `json:"equipped,omitempty"`
 }
 
@@ -95,6 +96,7 @@ type UpdateMsg struct {
 type PlayerSnap struct {
 	ID       string            `json:"id"`
 	Name     string            `json:"name"`
+	Class    string            `json:"cls,omitempty"`
 	X        float64           `json:"x"`
 	Y        float64           `json:"y"`
 	Anim     string            `json:"anim"`

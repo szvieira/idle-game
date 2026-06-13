@@ -111,7 +111,11 @@ export class RaidScene extends Phaser.Scene {
     }
 
     if (!this.playerSprites.has(player.id)) {
-      const doll = new PaperDollContainer(this, player.x, player.y).setDepth(3)
+      const doll = new PaperDollContainer(this, player.x, player.y,
+        player.id === GameState.instance.character?.id
+          ? (GameState.instance.character?.class ?? 'Warrior')
+          : 'Warrior'
+      ).setDepth(3)
       if (player.id !== GameState.instance.character?.id) {
         const base = (doll as unknown as { base?: Phaser.GameObjects.Image }).base
         base?.setTint(0x88aaff)

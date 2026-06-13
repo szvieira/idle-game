@@ -136,7 +136,8 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   private buildHeroAvatar(): void {
-    const doll = new PaperDollContainer(this, W/2, 472)
+    const char = GameState.instance.character!
+    const doll = new PaperDollContainer(this, W/2, 472, char.class)
     doll.setDepth(3)
     for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
       if (item) doll.equip(slot as EquipmentSlot, item.template.name)
@@ -207,7 +208,8 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   private makeWidgetDoll(): PaperDollContainer {
-    const doll = new PaperDollContainer(this, 754, 30)
+    const char = GameState.instance.character!
+    const doll = new PaperDollContainer(this, 754, 30, char.class)
     doll.setScale(0.62).setDepth(23)
     for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
       if (item) doll.equip(slot as EquipmentSlot, item.template.name)
@@ -278,7 +280,7 @@ export class LobbyScene extends Phaser.Scene {
     })
 
     // PaperDoll (lives outside the container, gets its own depth)
-    const modalDoll = new PaperDollContainer(this, 164, 200)
+    const modalDoll = new PaperDollContainer(this, 164, 200, char.class)
     modalDoll.setScale(1.6).setDepth(76)
     for (const [slot, item] of Object.entries(eq)) {
       if (item) modalDoll.equip(slot as EquipmentSlot, item.template.name)
@@ -529,6 +531,7 @@ export class LobbyScene extends Phaser.Scene {
       y: this.hero.y,
       moving: this.moveTo !== null,
       equipped: this.getOwnEquipped(),
+      cls: char.class,
     }))
   }
 
@@ -574,7 +577,7 @@ export class LobbyScene extends Phaser.Scene {
 
       const entry = this.otherPlayers.get(player.id)
       if (!entry) {
-        const doll = new PaperDollContainer(this, player.x, player.y)
+        const doll = new PaperDollContainer(this, player.x, player.y, player.cls ?? 'Warrior')
         doll.setDepth(3).setTint(0x88aaff)
         if (player.equipped) this.applyEquippedToDoll(doll, player.equipped)
         const label = this.add.text(player.x, player.y - 40, player.name, {
