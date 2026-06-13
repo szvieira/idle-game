@@ -11,7 +11,9 @@ import { W, H, FONT } from './BaseCombat'
 import type { EquipmentSlot, InventoryItem } from '../types/api'
 import type { PlayerSnap } from '../net/PresenceSocket'
 
-const LOBBY_ARENA = { x1: 60, y1: 335, x2: 900, y2: 520 }
+const WORLD_W = 1920
+const WORLD_H = 800
+const LOBBY_ARENA = { x1: 80, y1: 380, x2: 1840, y2: 760 }
 const BASE = 'http://localhost:8080'
 
 const RARITY_COLOR: Record<string, number> = {
@@ -98,6 +100,9 @@ export class LobbyScene extends Phaser.Scene {
 
     this.buildCamp()
     this.buildHeroAvatar()
+    this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H)
+    this.cameras.main.startFollow(this.hero.doll, true, 0.08, 0.08)
+    this.cameras.main.setDeadzone(100, 70)
     this.buildPOIs()
     this.buildTopUI()
     this.buildCharWidget()
@@ -137,14 +142,14 @@ export class LobbyScene extends Phaser.Scene {
 
   private buildHeroAvatar(): void {
     const char = GameState.instance.character!
-    const doll = new PaperDollContainer(this, W/2, 472, char.class)
+    const doll = new PaperDollContainer(this, 960, 560, char.class)
     doll.setDepth(3)
     for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
       if (item) doll.equip(slot as EquipmentSlot, item.template.name)
     }
     this.hero = {
-      x: W/2, y: 472, speed: 175, doll,
-      shadow: this.add.ellipse(W/2, 504, 50, 12, 0x000000, 0.35).setDepth(1),
+      x: 960, y: 560, speed: 175, doll,
+      shadow: this.add.ellipse(960, 592, 50, 12, 0x000000, 0.35).setDepth(1),
     }
   }
 
