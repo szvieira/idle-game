@@ -47,6 +47,7 @@ interface HeroState {
   speed: number
   nextAtk: number; skillReady: number; castLock: number
   x: number; y: number
+  dollOffX: number; dollOffY: number  // visual-only offset for lunge / shake
   doll: PaperDollContainer
   shadow: Phaser.GameObjects.Ellipse
   hpBar: Phaser.GameObjects.Graphics
@@ -77,6 +78,8 @@ export abstract class BaseCombat extends Phaser.Scene {
   protected menuOpen = false
   protected portal: { x: number; y: number; container: Phaser.GameObjects.Container; label: Phaser.GameObjects.Text } | null = null
   protected autoSkill = true
+
+  private breathTween: Phaser.Tweens.Tween | null = null
 
   // HUD refs
   private txtGold!: Phaser.GameObjects.Text
@@ -145,10 +148,17 @@ export abstract class BaseCombat extends Phaser.Scene {
       speed: 175,
       nextAtk: 0, skillReady: 0, castLock: 0,
       x: 130, y: 360,
+      dollOffX: 0, dollOffY: 0,
       doll,
       shadow: this.add.ellipse(130, 392, 50, 12, 0x000000, 0.35).setDepth(1),
       hpBar:  this.add.graphics().setDepth(8),
     }
+
+    // Idle breath — subtle vertical bob
+    this.breathTween = this.tweens.add({
+      targets: this.hero, dollOffY: -3,
+      duration: 1100, ease: 'Sine.inOut', yoyo: true, repeat: -1,
+    })
   }
 
   setupInput(): void {
@@ -240,8 +250,8 @@ export abstract class BaseCombat extends Phaser.Scene {
     const h = this.hero
     h.x = Phaser.Math.Clamp(h.x, ARENA.x1, ARENA.x2)
     h.y = Phaser.Math.Clamp(h.y, ARENA.y1, ARENA.y2)
-    h.doll.setPosition(h.x, h.y)
-    h.shadow.setPosition(h.x, h.y + 32)
+    h.doll.setPosition(h.x + h.dollOffX, h.y + h.dollOffY)
+    h.shadow.setPosition(h.x + h.dollOffX * 0.5, h.y + 32)
   }
 
   syncEnemy(e: EnemyState): void {
@@ -328,7 +338,15 @@ export abstract class BaseCombat extends Phaser.Scene {
       const isCrit = Math.random() < h.crit
       const dmg    = Math.round(h.atk * (0.85 + Math.random()*0.3) * (isCrit ? h.critMult : 1))
       h.doll.setFlipX(enemy.x < h.x)
-      this.jabAnim(h, enemy)
+
+      // Visual lunge toward enemy and snap back
+      const lx = (enemy.x - h.x) / Math.max(d, 1) * 16
+      const ly = (enemy.y - h.y) / Math.max(d, 1) * 10
+      this.tweens.add({
+        targets: h, dollOffX: h.dollOffX + lx, dollOffY: h.dollOffY + ly,
+        duration: 70, ease: 'Cubic.out', yoyo: true, onComplete: () => { h.dollOffX = 0 },
+      })
+
       this.slashFx(enemy.x, enemy.y, isCrit)
       this.applyDamage(enemy, dmg, isCrit)
     }
@@ -392,9 +410,15 @@ export abstract class BaseCombat extends Phaser.Scene {
   private enemyStrike(e: EnemyState): void {
     const h = this.hero
     const dmg = Math.max(1, Math.round(e.atk * (0.85 + Math.random()*0.3) - h.def))
-    this.jabAnim(e, h)
     h.hp = Math.max(0, h.hp - dmg)
-    this.tweens.add({ targets:h.doll, alpha:0.2, duration:60, yoyo:true })
+
+    // Horizontal shake stagger
+    const shakeX = e.x < h.x ? 10 : -10
+    this.tweens.add({
+      targets: h, dollOffX: shakeX, duration: 40, ease: 'Quad.out',
+      yoyo: true, repeat: 1, onComplete: () => { h.dollOffX = 0 },
+    })
+    this.tweens.add({ targets: h.doll, alpha: 0.4, duration: 50, yoyo: true })
     this.floatDamage(h.x, h.y - 56, dmg, '#ff7a6e', false)
     this.cameras.main.shake(60, 0.002)
     if (h.hp <= 0) this.onHeroDown()
@@ -405,14 +429,41 @@ export abstract class BaseCombat extends Phaser.Scene {
     e.hp -= dmg; e.angry = true
     this.hitFlash(e.sprite)
     this.floatDamage(e.x, e.y - e.barOff - 4, dmg, color ?? (isCrit ? '#ffffff' : '#ffdd88'), isCrit)
+    if (isCrit) {
+      const flash = this.add.rectangle(W/2, H/2, W, H, 0xffffff, 0).setDepth(25)
+      this.tweens.add({ targets: flash, alpha: 0.12, duration: 35, yoyo: true,
+        onComplete: () => flash.destroy() })
+    }
     if (e.hp <= 0) this.killEnemy(e)
   }
 
   killEnemy(e: EnemyState): void {
     e.dead = true; e.hp = 0; e.hpBar.clear()
     e.shadow.destroy()
-    this.tweens.add({ targets:e.sprite, alpha:0, y:`+=14`, angle:90,
-      duration:350, onComplete: () => e.sprite.destroy() })
+
+    const key = e.sprite.texture.key.replace('spr_', '')
+    if (key === 'slime') {
+      this.tweens.add({ targets: e.sprite, scaleX: 2.2, scaleY: 0.1, y: `+=18`, alpha: 0,
+        duration: 380, ease: 'Cubic.out', onComplete: () => e.sprite.destroy() })
+    } else if (key === 'bat') {
+      this.tweens.add({ targets: e.sprite, y: `+=55`, angle: Phaser.Math.Between(-200, 200),
+        alpha: 0, scale: 0.2, duration: 450, ease: 'Quad.in', onComplete: () => e.sprite.destroy() })
+    } else if (key === 'skeleton') {
+      this.tweens.add({ targets: e.sprite, alpha: 0, scale: 0.1, y: `+=6`,
+        duration: 300, ease: 'Quad.in', onComplete: () => e.sprite.destroy() })
+      for (let i = 0; i < 6; i++) {
+        const chip = this.add.rectangle(
+          e.x + Phaser.Math.Between(-18, 18), e.y + Phaser.Math.Between(-12, 8),
+          Phaser.Math.Between(3, 6), 2, 0xe8e2d0).setDepth(9)
+        this.tweens.add({ targets: chip,
+          x: `+=${Phaser.Math.Between(-44, 44)}`, y: `+=${Phaser.Math.Between(8, 44)}`,
+          alpha: 0, duration: 400, onComplete: () => chip.destroy() })
+      }
+    } else {
+      this.tweens.add({ targets: e.sprite, alpha: 0, y: `+=14`, angle: 90,
+        duration: 350, onComplete: () => e.sprite.destroy() })
+    }
+
     this.onEnemyKilled(e)
     if (!this.aliveEnemies().length) this.onRoomCleared()
   }
@@ -438,12 +489,32 @@ export abstract class BaseCombat extends Phaser.Scene {
   private castWhirlwind(): void {
     const h = this.hero
     this.banner('WHIRLWIND!', '#7fd4ff')
-    this.tweens.add({ targets:h.doll, angle:720, duration:520, ease:'Cubic.out',
+    this.tweens.add({ targets: h.doll, angle: 720, duration: 520, ease: 'Cubic.out',
       onComplete: () => h.doll.setAngle(0) })
+
+    // Expanding ring
     const ring = this.add.circle(h.x, h.y, 12).setDepth(9).setStrokeStyle(6, 0x7fd4ff, 1)
-    this.tweens.add({ targets:ring, radius:SKILL_RADIUS, alpha:0, duration:480, ease:'Quad.out',
+    this.tweens.add({ targets: ring, radius: SKILL_RADIUS, alpha: 0, duration: 480, ease: 'Quad.out',
       onUpdate: () => ring.setStrokeStyle(6, 0x7fd4ff, Math.max(ring.alpha, 0)),
       onComplete: () => ring.destroy() })
+
+    // Spiral particles orbiting outward
+    const count = 10
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2
+      const p = this.add.circle(
+        h.x + Math.cos(angle) * 18, h.y + Math.sin(angle) * 18,
+        Phaser.Math.Between(3, 6), 0x7fd4ff).setDepth(10).setAlpha(0.9)
+      this.tweens.add({
+        targets: p,
+        x: h.x + Math.cos(angle) * SKILL_RADIUS,
+        y: h.y + Math.sin(angle) * SKILL_RADIUS,
+        alpha: 0, scale: 0.2,
+        duration: 440, delay: i * 18, ease: 'Quad.out',
+        onComplete: () => p.destroy(),
+      })
+    }
+
     this.cameras.main.shake(180, 0.006)
     this.time.delayedCall(160, () => {
       const dmg = Math.round(h.atk * this.skill.mult)
@@ -458,10 +529,18 @@ export abstract class BaseCombat extends Phaser.Scene {
     const tx = Phaser.Math.Clamp(enemy.x - 30 * Math.sign(enemy.x - h.x), ARENA.x1, ARENA.x2)
     const ty = Phaser.Math.Clamp(enemy.y, ARENA.y1, ARENA.y2)
     this.banner('CHARGE!', '#ffd34d')
-    this.tweens.add({ targets:h, x:tx, y:ty, duration:220, ease:'Cubic.in',
-      onUpdate: () => this.syncHero(),
+    this.tweens.add({ targets: h, x: tx, y: ty, duration: 220, ease: 'Cubic.in',
+      onUpdate: () => {
+        this.syncHero()
+        // Motion trail
+        if (Math.random() < 0.5) {
+          const tr = this.add.circle(h.x, h.y, Phaser.Math.Between(4, 7), 0xffd34d, 0.55).setDepth(2)
+          this.tweens.add({ targets: tr, alpha: 0, scale: 0.1, duration: 180,
+            onComplete: () => tr.destroy() })
+        }
+      },
       onComplete: () => {
-        this.cameras.main.shake(150, 0.006)
+        this.cameras.main.shake(150, 0.008)
         const dmg = Math.round(h.atk * this.skill.mult)
         this.applyDamage(enemy, dmg, true, '#ffd34d')
         this.enemiesWithin(enemy, 70).forEach(e => {
@@ -472,27 +551,31 @@ export abstract class BaseCombat extends Phaser.Scene {
   }
 
   // ── VFX ─────────────────────────────────────────────────────────────────────
-  private jabAnim(from: {x:number;y:number}, to: {x:number;y:number}): void {
-    const line = this.add.graphics().setDepth(9)
-    line.lineStyle(2, 0xffffff, 0.7)
-    line.strokeLineShape(new Phaser.Geom.Line(from.x, from.y, to.x, to.y))
-    this.tweens.add({ targets:line, alpha:0, duration:120, onComplete: () => line.destroy() })
-  }
-
   slashFx(x: number, y: number, crit: boolean): void {
-    const color = crit ? 0xffffff : 0xffdd88
-    for (let i = 0; i < (crit ? 5 : 3); i++) {
-      const p = this.add.rectangle(
-        x + Phaser.Math.Between(-16,16), y + Phaser.Math.Between(-16,16),
-        crit ? 6 : 4, crit ? 6 : 4, color).setDepth(9)
-      this.tweens.add({ targets:p, x:`+=${Phaser.Math.Between(-24,24)}`,
-        y:`+=${Phaser.Math.Between(-24,24)}`, alpha:0, duration:300,
-        onComplete: () => p.destroy() })
+    const count  = crit ? 8 : 4
+    const colors = crit ? [0xffffff, 0xffe4a3, 0xffd34d] : [0xffdd88, 0xffa726, 0xff7a6e]
+    for (let i = 0; i < count; i++) {
+      const color = colors[Math.floor(Math.random() * colors.length)]
+      const r = crit ? Phaser.Math.Between(3, 7) : Phaser.Math.Between(2, 4)
+      const p = this.add.circle(
+        x + Phaser.Math.Between(-20, 20), y + Phaser.Math.Between(-20, 20),
+        r, color).setDepth(9).setAlpha(0.9)
+      this.tweens.add({
+        targets: p,
+        x: `+=${Phaser.Math.Between(-38, 38)}`,
+        y: `+=${Phaser.Math.Between(-32, 20)}`,
+        alpha: 0, scale: 0.1,
+        duration: crit ? 520 : 340,
+        ease: 'Quad.out',
+        onComplete: () => p.destroy(),
+      })
     }
   }
 
   private hitFlash(sprite: Phaser.GameObjects.Image): void {
-    this.tweens.add({ targets:sprite, alpha:0.2, duration:60, yoyo:true })
+    this.tweens.add({ targets: sprite, alpha: 0.15, duration: 55, yoyo: true })
+    sprite.setTint(0xff8888)
+    this.time.delayedCall(110, () => sprite.clearTint())
   }
 
   floatDamage(x: number, y: number, dmg: number, color: string, crit: boolean): void {

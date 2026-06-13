@@ -63,7 +63,10 @@ export class DungeonScene extends BaseCombat {
     if (isBoss && this.enemies[0]) {
       this.enemies[0].boss = true
       this.enemies[0].barW = 80
-      this.enemies[0].barOff = 60
+      this.enemies[0].barOff = 70
+      // Boss visual weight: larger sprite + ominous red tint
+      this.enemies[0].sprite.setScale(1.5).setTint(0xff5544)
+      this.enemies[0].shadow.setSize(70, 16)
     }
     this.txtRoom.setText(isBoss ? 'BOSS ROOM' : `ROOM ${this.roomIndex+1}/${TOTAL_ROOMS}`)
   }
