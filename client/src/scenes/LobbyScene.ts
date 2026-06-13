@@ -3,12 +3,34 @@ import { GameState } from '../state/GameState'
 import { PaperDollContainer } from '../combat/PaperDollContainer'
 import { VISUAL_SLOTS } from '../combat/sprites'
 import { PresenceSocket } from '../net/PresenceSocket'
+import { getInventory, getEquipped, equipItem, unequipItem } from '../api/items'
+import { getSkills, unlockSkill, equipSkill } from '../api/skills'
 import { W, H, FONT } from './BaseCombat'
-import type { EquipmentSlot } from '../types/api'
+import type { EquipmentSlot, InventoryItem } from '../types/api'
 import type { PlayerSnap } from '../net/PresenceSocket'
 
 const LOBBY_ARENA = { x1: 60, y1: 335, x2: 900, y2: 520 }
 const BASE = 'http://localhost:8080'
+
+const RARITY_COLOR: Record<string, number> = {
+  Common: 0xb8c0cc, Uncommon: 0x5ec05e, Rare: 0x4da3ff, Epic: 0xc45aff,
+}
+
+// Equipment slot grid: 2 columns × 3 rows in the modal left panel
+const EQ_GRID = [
+  ['Helmet', 'Ring'],
+  ['Weapon', 'Amulet'],
+  ['Armor',  'Boots'],
+] as const
+
+const SKILL_NODES = [
+  { id: 'whirlwind',   name: 'Whirlwind',   type: 'active'  as const, req: null,           col: 0,  row: 0 },
+  { id: 'brute_force', name: 'Brute Force', type: 'passive' as const, req: 'whirlwind',    col: -1, row: 1 },
+  { id: 'fury',        name: 'Fury',        type: 'passive' as const, req: 'brute_force',  col: -1, row: 2 },
+  { id: 'charge',      name: 'Charge',      type: 'active'  as const, req: 'fury',         col: -1, row: 3 },
+  { id: 'iron_skin',   name: 'Iron Skin',   type: 'passive' as const, req: 'whirlwind',    col:  1, row: 1 },
+  { id: 'vigor',       name: 'Vigor',       type: 'passive' as const, req: 'iron_skin',    col:  1, row: 2 },
+]
 
 interface OtherPlayer {
   doll: PaperDollContainer
@@ -49,6 +71,12 @@ export class LobbyScene extends Phaser.Scene {
   private otherPlayers: Map<string, OtherPlayer> = new Map()
   private lobbyPollInterval: ReturnType<typeof setInterval> | null = null
 
+  // Character modal state
+  private charWidgetDoll: PaperDollContainer | null = null
+  private modalDolls: PaperDollContainer[] = []
+  private activeModal: Phaser.GameObjects.Container | null = null
+  private modalFromPoi = false
+
   constructor() { super({ key: 'Lobby' }) }
 
   font(size: number, color = '#e8e2d0'): Phaser.Types.GameObjects.Text.TextStyle {
@@ -63,11 +91,14 @@ export class LobbyScene extends Phaser.Scene {
     this.locked = false
     this.moveTo = null
     this.otherPlayers.clear()
+    this.activeModal = null
+    this.modalDolls = []
 
     this.buildCamp()
     this.buildHeroAvatar()
     this.buildPOIs()
     this.buildTopUI()
+    this.buildCharWidget()
     this.setupInput()
     this.setupPresence()
     this.events.once('shutdown', () => this.shutdownScene())
@@ -137,7 +168,7 @@ export class LobbyScene extends Phaser.Scene {
       onEnter: () => this.openShop() })
 
     this.addPOI({ x:382, y:390, r:50, color:0x9aa8bd, label:'CHARACTER',
-      onEnter: () => this.scene.start('CharacterSheet') })
+      onEnter: () => { this.modalFromPoi = true; void this.openCharModal() } })
 
     this.addPOI({ x:510, y:365, r:45, color:0xff4d6d, label:'RAID',
       onEnter: () => this.openRaidDialog() })
@@ -148,6 +179,322 @@ export class LobbyScene extends Phaser.Scene {
     this.add.text(20, 14, `${char.name}  Lv.${char.level}  ${char.class}`, this.font(11)).setDepth(20)
     this.add.text(20, 34, `HP: ${char.hp}/${char.max_hp}   Gold: ${char.gold}`, this.font(9,'#aaaacc')).setDepth(20)
   }
+
+  // ── Character widget (top-right) ──────────────────────────────────────────
+
+  private buildCharWidget(): void {
+    const char = GameState.instance.character!
+
+    // Interactive background card
+    const bg = this.add.rectangle(838, 30, 230, 46, 0x0d0a1a, 0.92)
+      .setStrokeStyle(1, 0x334466)
+      .setInteractive({ useHandCursor: true })
+      .setDepth(22)
+
+    this.charWidgetDoll = this.makeWidgetDoll()
+
+    this.add.text(793, 19, char.name, this.font(7)).setOrigin(0, 0.5).setDepth(24)
+    this.add.text(793, 37, `Lv.${char.level}  ${char.class}`, this.font(7, '#9aa8bd')).setOrigin(0, 0.5).setDepth(24)
+
+    bg.on('pointerdown', () => {
+      if (this.activeModal || this.locked) return
+      this.locked = true
+      this.modalFromPoi = false
+      void this.openCharModal()
+    })
+  }
+
+  private makeWidgetDoll(): PaperDollContainer {
+    const doll = new PaperDollContainer(this, 754, 30)
+    doll.setScale(0.62).setDepth(23)
+    for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
+      if (item) doll.equip(slot as EquipmentSlot, item.template.name)
+    }
+    return doll
+  }
+
+  private rebuildWidgetDoll(): void {
+    this.charWidgetDoll?.destroy()
+    this.charWidgetDoll = this.makeWidgetDoll()
+  }
+
+  // ── Character modal ────────────────────────────────────────────────────────
+
+  private async openCharModal(): Promise<void> {
+    if (this.activeModal) return
+    const char = GameState.instance.character!
+    try {
+      const [inventory, equipped, skills] = await Promise.all([
+        getInventory(char.id),
+        getEquipped(char.id),
+        getSkills(char.id),
+      ])
+      if (!this.scene.isActive('Lobby')) return
+      GameState.instance.inventory = inventory
+      GameState.instance.equipped  = equipped
+      GameState.instance.skills    = skills
+    } catch {
+      this.locked = false
+      return
+    }
+    this.buildCharModalContent()
+  }
+
+  private buildCharModalContent(): void {
+    const char      = GameState.instance.character!
+    const eq        = GameState.instance.equipped
+    const inventory = GameState.instance.inventory
+    const skills    = GameState.instance.skills
+
+    const modal = this.add.container(0, 0).setDepth(70)
+    this.activeModal = modal
+
+    // Full-screen backdrop (intercepts clicks so hero doesn't move)
+    modal.add(this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.85).setInteractive())
+
+    // Modal panel background
+    modal.add(this.add.rectangle(W/2, H/2, 930, 518, 0x0d0a1a).setStrokeStyle(2, 0x334466))
+
+    // Divider between left/right panels
+    const divG = this.add.graphics()
+    divG.lineStyle(1, 0x334466, 0.7)
+    divG.strokeLineShape(new Phaser.Geom.Line(310, 14, 310, 526))
+    modal.add(divG)
+
+    // ── Left panel (x: 20–308, center 164) ──────────────────────────────────
+
+    // Stat block
+    const statLines: [string, string, number][] = [
+      [char.name,                                    '#e8e2d0', 10],
+      [`Lv.${char.level}  ${char.class}`,            '#9aa8bd',  8],
+      [`HP: ${char.hp} / ${char.max_hp}`,            '#888899',  7],
+      [`ATK: ${char.attack}   DEF: ${char.defense}`, '#888899',  7],
+      [`CRIT: ${char.critical}%   CDR: ${char.cdr}%`,'#888899', 7],
+    ]
+    statLines.forEach(([text, color, size], i) => {
+      modal.add(this.add.text(164, 28 + i * 22, text, this.font(size, color)).setOrigin(0.5))
+    })
+
+    // PaperDoll (lives outside the container, gets its own depth)
+    const modalDoll = new PaperDollContainer(this, 164, 200)
+    modalDoll.setScale(1.6).setDepth(76)
+    for (const [slot, item] of Object.entries(eq)) {
+      if (item) modalDoll.equip(slot as EquipmentSlot, item.template.name)
+    }
+    this.modalDolls.push(modalDoll)
+
+    // Equipment slots grid: 2 cols × 3 rows
+    EQ_GRID.forEach(([slotA, slotB], ri) => {
+      ([slotA, slotB] as const).forEach((slot, ci) => {
+        const x = 90 + ci * 145
+        const y = 300 + ri * 64
+        const item  = eq[slot as EquipmentSlot]
+        const color = item ? RARITY_COLOR[item.template.rarity] : 0x333344
+        modal.add(this.add.rectangle(x, y, 132, 50, 0x111128).setStrokeStyle(1, color))
+        modal.add(this.add.text(x, y - 11, slot.toUpperCase(), this.font(5, '#555566')).setOrigin(0.5))
+        modal.add(this.add.text(x, y + 7,
+          item ? item.template.name : '—',
+          this.font(7, item ? `#${color.toString(16).padStart(6,'0')}` : '#333344')).setOrigin(0.5))
+      })
+    })
+
+    // ── Right panel (x: 318–948, center 633) ────────────────────────────────
+
+    type Tab = 'inventory' | 'skills'
+    let activeTab: Tab = 'inventory'
+    const tabObjs: Record<Tab, Phaser.GameObjects.GameObject[]> = { inventory: [], skills: [] }
+    const tabBtns: Partial<Record<Tab, Phaser.GameObjects.Rectangle>> = {}
+
+    const showTab = (tab: Tab) => {
+      activeTab = tab
+      for (const [t, objs] of Object.entries(tabObjs)) {
+        const vis = t === tab
+        objs.forEach(o => (o as unknown as { setVisible?(b: boolean): void }).setVisible?.(vis))
+      }
+      for (const [t, btn] of Object.entries(tabBtns)) {
+        btn?.setFillStyle(t === tab ? 0x1a2035 : 0x111128)
+      }
+    }
+
+    const tabDefs: { id: Tab; label: string; x: number; w: number }[] = [
+      { id: 'inventory', label: 'INVENTORY', x: 453, w: 158 },
+      { id: 'skills',    label: 'SKILLS',    x: 633, w: 120 },
+    ]
+    tabDefs.forEach(({ id, label, x, w }) => {
+      const btn = this.add.rectangle(x, 42, w, 32, id === activeTab ? 0x1a2035 : 0x111128)
+        .setStrokeStyle(1, 0x334466)
+        .setInteractive({ useHandCursor: true })
+      modal.add(btn)
+      modal.add(this.add.text(x, 42, label, this.font(7, '#9aa8bd')).setOrigin(0.5))
+      tabBtns[id] = btn
+      btn.on('pointerdown', () => showTab(id))
+    })
+
+    // ── Inventory tab content ────────────────────────────────────────────────
+
+    const buildInventory = () => {
+      if (inventory.length === 0) {
+        const e = this.add.text(633, 290, 'No items yet', this.font(10, '#333344')).setOrigin(0.5)
+        tabObjs.inventory.push(e); modal.add(e)
+        return
+      }
+
+      const COLS = 3, CW = 197, CH = 52, SX = 420, SY = 82, ROW_GAP = 58
+      inventory.forEach((item: InventoryItem, idx) => {
+        const col = idx % COLS
+        const row = Math.floor(idx / COLS)
+        const x   = SX + col * CW
+        const y   = SY + row * ROW_GAP
+        if (y + CH / 2 > 524) return
+
+        const isEquipped = Object.values(eq).some(e => e?.id === item.id)
+        const color = RARITY_COLOR[item.template.rarity]
+
+        const box = this.add.rectangle(x, y, CW - 6, CH, isEquipped ? 0x0d1a0d : 0x111128)
+          .setStrokeStyle(1, isEquipped ? 0x5ec05e : color)
+          .setInteractive({ useHandCursor: true })
+        const nameTxt = this.add.text(x, y - 11, item.template.name,
+          this.font(7, `#${color.toString(16).padStart(6,'0')}`)).setOrigin(0.5)
+        const bonuses = [
+          item.template.attack_bonus  ? `+${item.template.attack_bonus}ATK`   : '',
+          item.template.hp_bonus      ? `+${item.template.hp_bonus}HP`        : '',
+          item.template.defense_bonus ? `+${item.template.defense_bonus}DEF`  : '',
+          item.template.crit_bonus    ? `+${item.template.crit_bonus}%CR`     : '',
+          item.template.cdr_bonus     ? `+${item.template.cdr_bonus}%CDR`     : '',
+        ].filter(Boolean).join(' ')
+        const statTxt = this.add.text(x, y + 8, bonuses, this.font(6, '#777788')).setOrigin(0.5)
+
+        tabObjs.inventory.push(box, nameTxt, statTxt)
+        modal.add(box); modal.add(nameTxt); modal.add(statTxt)
+
+        box.on('pointerdown', async () => {
+          box.disableInteractive()
+          try {
+            const slot = item.template.slot as EquipmentSlot
+            if (isEquipped) {
+              GameState.instance.character = await unequipItem(char.id, slot)
+              delete GameState.instance.equipped[slot]
+            } else {
+              GameState.instance.character = await equipItem(char.id, slot, item.id)
+              GameState.instance.equipped[slot] = item
+            }
+            await this.refreshCharModal()
+          } catch {
+            box.setInteractive({ useHandCursor: true })
+          }
+        })
+      })
+    }
+    buildInventory()
+
+    // ── Skills tab content ───────────────────────────────────────────────────
+
+    const buildSkills = () => {
+      const CX = 633, BY = 90, CW = 140, RH = 90
+
+      const ptsLabel = this.add.text(CX, 65,
+        `${skills.available_points} skill point(s) available`, this.font(7, '#9aa8bd')).setOrigin(0.5)
+      tabObjs.skills.push(ptsLabel); modal.add(ptsLabel)
+
+      const lineG = this.add.graphics()
+      lineG.lineStyle(2, 0x334455, 1)
+      SKILL_NODES.forEach(node => {
+        if (!node.req) return
+        const parent = SKILL_NODES.find(n => n.id === node.req)!
+        lineG.strokeLineShape(new Phaser.Geom.Line(
+          CX + parent.col * CW, BY + parent.row * RH,
+          CX + node.col   * CW, BY + node.row   * RH,
+        ))
+      })
+      tabObjs.skills.push(lineG); modal.add(lineG)
+
+      SKILL_NODES.forEach(node => {
+        const nx = CX + node.col * CW
+        const ny = BY + node.row * RH
+        const isUnlocked = skills.unlocked.includes(node.id)
+        const isEquipped = skills.equipped_skill === node.id
+        const prereqMet  = !node.req || skills.unlocked.includes(node.req)
+        const canUnlock  = !isUnlocked && prereqMet && skills.available_points > 0
+
+        const border = isEquipped ? 0xffd34d : isUnlocked ? 0x5ec05e : canUnlock ? 0x334466 : 0x222233
+        const box = this.add.rectangle(nx, ny, 122, 46, isUnlocked ? 0x0d1a0d : 0x111128)
+          .setStrokeStyle(2, border)
+        const nameTxt = this.add.text(nx, ny - 8, node.name,
+          this.font(8, isUnlocked ? '#88ff88' : canUnlock ? '#7788aa' : '#445566')).setOrigin(0.5)
+        const typeTxt = this.add.text(nx, ny + 9,
+          isEquipped ? 'EQUIPPED' : node.type.toUpperCase(),
+          this.font(7, isEquipped ? '#ffd34d' : '#556677')).setOrigin(0.5)
+
+        tabObjs.skills.push(box, nameTxt, typeTxt)
+        modal.add(box); modal.add(nameTxt); modal.add(typeTxt)
+
+        if (canUnlock || (isUnlocked && node.type === 'active' && !isEquipped)) {
+          box.setInteractive({ useHandCursor: true })
+          box.on('pointerdown', async () => {
+            box.disableInteractive()
+            try {
+              if (canUnlock) {
+                GameState.instance.skills = await unlockSkill(char.id, node.id)
+              } else {
+                GameState.instance.skills = await equipSkill(char.id, node.id)
+              }
+              await this.refreshCharModal()
+            } catch {
+              box.setInteractive({ useHandCursor: true })
+            }
+          })
+        }
+      })
+    }
+    buildSkills()
+
+    // Default to inventory tab
+    showTab('inventory')
+
+    // ── Close button ─────────────────────────────────────────────────────────
+    const closeBtn = this.add.rectangle(938, 26, 38, 26, 0x1a0d0d)
+      .setStrokeStyle(1, 0x664444)
+      .setInteractive({ useHandCursor: true })
+    modal.add(closeBtn)
+    modal.add(this.add.text(938, 26, 'X', this.font(9, '#cc6666')).setOrigin(0.5))
+    closeBtn.on('pointerdown', () => this.closeCharModal())
+  }
+
+  private closeCharModal(): void {
+    for (const d of this.modalDolls) d.destroy()
+    this.modalDolls = []
+    this.activeModal?.destroy()
+    this.activeModal = null
+    if (this.modalFromPoi) {
+      this.resetHeroToCenter()
+    } else {
+      this.locked = false
+    }
+  }
+
+  private async refreshCharModal(): Promise<void> {
+    // Tear down without resetting movement lock
+    for (const d of this.modalDolls) d.destroy()
+    this.modalDolls = []
+    this.activeModal?.destroy()
+    this.activeModal = null
+
+    const char = GameState.instance.character!
+    const [inventory, equipped, skills] = await Promise.all([
+      getInventory(char.id),
+      getEquipped(char.id),
+      getSkills(char.id),
+    ])
+    if (!this.scene.isActive('Lobby')) return
+    GameState.instance.inventory = inventory
+    GameState.instance.equipped  = equipped
+    GameState.instance.skills    = skills
+
+    this.rebuildWidgetDoll()
+    this.buildCharModalContent()
+  }
+
+  // ── Presence ───────────────────────────────────────────────────────────────
 
   private setupInput(): void {
     this.input.on('pointerdown', (_p: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]) => {
@@ -204,6 +551,10 @@ export class LobbyScene extends Phaser.Scene {
       entry.label.destroy()
     }
     this.otherPlayers.clear()
+    this.charWidgetDoll?.destroy()
+    this.charWidgetDoll = null
+    for (const d of this.modalDolls) d.destroy()
+    this.modalDolls = []
   }
 
   private applyEquippedToDoll(doll: PaperDollContainer, equipped: Record<string, string>): void {
@@ -358,7 +709,6 @@ export class LobbyScene extends Phaser.Scene {
       overlay.add(this.add.text(W/2, 132, 'Waiting for leader to start…', this.font(8, '#9aa8bd')).setOrigin(0.5))
     }
 
-    // Member list area
     overlay.add(this.add.text(W/2, 215, 'PARTY MEMBERS', this.font(8, '#888899')).setOrigin(0.5))
     const memberContainer = this.add.container(W/2, 240)
     overlay.add(memberContainer)
@@ -367,8 +717,7 @@ export class LobbyScene extends Phaser.Scene {
       memberContainer.removeAll(true)
       members.forEach((m, i) => {
         const classColor = m.class === 'Warrior' ? '#ff9966' : m.class === 'Mage' ? '#7fd4ff' : '#88ff88'
-        const leaderTag = m.is_leader ? ' ★' : ''
-        const txt = this.add.text(0, i * 26, `${m.name}  [${m.class}]${leaderTag}`, this.font(8, classColor)).setOrigin(0.5)
+        const txt = this.add.text(0, i * 26, `${m.name}  [${m.class}]${m.is_leader ? ' ★' : ''}`, this.font(8, classColor)).setOrigin(0.5)
         memberContainer.add(txt)
       })
     }
@@ -395,24 +744,22 @@ export class LobbyScene extends Phaser.Scene {
       })
     }
 
-    const leaveBtn = this.add.rectangle(W/2, isLeader ? 448 : 390, 160, 34, 0x2a1a1e).setStrokeStyle(1, 0xff4d6d).setInteractive({ useHandCursor: true })
-    const leaveTxt = this.add.text(W/2, isLeader ? 448 : 390, 'LEAVE', this.font(9, '#ff4d6d')).setOrigin(0.5)
-    overlay.add(leaveBtn); overlay.add(leaveTxt)
+    const leaveY = isLeader ? 448 : 390
+    const leaveBtn = this.add.rectangle(W/2, leaveY, 160, 34, 0x2a1a1e).setStrokeStyle(1, 0xff4d6d).setInteractive({ useHandCursor: true })
+    overlay.add(leaveBtn)
+    overlay.add(this.add.text(W/2, leaveY, 'LEAVE', this.font(9, '#ff4d6d')).setOrigin(0.5))
     leaveBtn.on('pointerdown', () => {
       this.clearLobbyPoll()
       overlay.destroy()
       this.resetHeroToCenter()
     })
 
-    // Poll lobby state every 2s
     const poll = async () => {
       try {
         const res = await fetch(`${BASE}/raid-lobbies/${lobbyId}`)
         if (!res.ok) return
         const state = await res.json() as LobbyState
         updateMembers(state.members)
-
-        // Non-leader: join raid once leader has started it
         if (!isLeader && state.status === 'started' && state.run_id) {
           this.clearLobbyPoll()
           overlay.destroy()
@@ -421,7 +768,7 @@ export class LobbyScene extends Phaser.Scene {
       } catch { /* ignore poll errors */ }
     }
 
-    void poll() // immediate first fetch
+    void poll()
     this.lobbyPollInterval = setInterval(() => { void poll() }, 2000)
   }
 
@@ -438,6 +785,8 @@ export class LobbyScene extends Phaser.Scene {
     this.moveTo = null
     this.locked = false
   }
+
+  // ── Update loop ────────────────────────────────────────────────────────────
 
   update(_time: number, delta: number): void {
     if (!this.hero) return
@@ -460,7 +809,7 @@ export class LobbyScene extends Phaser.Scene {
     h.doll.setPosition(h.x, h.y)
     h.shadow.setPosition(h.x, h.y + 32)
 
-    // Smoothly interpolate other players toward their last-received positions
+    // Lerp other players toward their latest received position
     const lerpFactor = Math.min(1, delta * 0.012)
     for (const entry of this.otherPlayers.values()) {
       const nx = entry.doll.x + (entry.targetX - entry.doll.x) * lerpFactor
@@ -471,8 +820,7 @@ export class LobbyScene extends Phaser.Scene {
 
     if (!this.locked) {
       for (const poi of this.pois) {
-        const d = Phaser.Math.Distance.Between(h.x, h.y, poi.x, poi.y)
-        if (d < poi.r - 10) {
+        if (Phaser.Math.Distance.Between(h.x, h.y, poi.x, poi.y) < poi.r - 10) {
           this.locked = true
           poi.onEnter()
           break
@@ -480,6 +828,8 @@ export class LobbyScene extends Phaser.Scene {
       }
     }
   }
+
+  // ── Shop (unchanged) ───────────────────────────────────────────────────────
 
   private openShop(): void {
     const char = GameState.instance.character!

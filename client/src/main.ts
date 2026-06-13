@@ -10,11 +10,15 @@ import { RaidScene } from './scenes/RaidScene'
 
 new Phaser.Game({
   type: Phaser.AUTO,
-  width: 960,
-  height: 540,
   backgroundColor: '#0b0a12',
-  parent: document.body,
   dom: { createContainer: true },
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 960,
+    height: 540,
+    parent: document.body,
+  },
   scene: [
     BootScene,
     CharacterSelectScene,

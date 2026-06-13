@@ -60,6 +60,12 @@ export class PaperDollContainer {
     return this
   }
 
+  setScale(s: number): this {
+    this.container.setScale(s)
+    return this
+  }
+
+  get scale(): number { return this.container.scale }
   get x(): number { return this.container.x }
   get y(): number { return this.container.y }
 
