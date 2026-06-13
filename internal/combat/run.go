@@ -23,11 +23,9 @@ func RunCombat(c *character.Character, e *Enemy, stats *RoomStats, isBoss bool, 
 
 	for tick := 1; ; tick++ {
 		stats.Ticks++
-		c.Mana = min(c.MaxMana, c.Mana+8)
 
 		switch {
-		case c.Class == "Priest" && c.HP < c.MaxHP/2 && c.SpecialCDTimer == 0 && c.Mana >= c.SpecialManaCost:
-			c.Mana -= c.SpecialManaCost
+		case c.Class == "Priest" && c.HP < c.MaxHP/2 && c.SpecialCDTimer == 0:
 			healed := c.SpecialHeal
 			c.HP += healed
 			if c.HP > c.MaxHP {
@@ -38,8 +36,7 @@ func RunCombat(c *character.Character, e *Enemy, stats *RoomStats, isBoss bool, 
 			stats.HealingReceived += healed
 			h.OnPlayerHeal(healed, c.SpecialName, c.HP, c.MaxHP)
 
-		case c.Class != "Priest" && c.SpecialCDTimer == 0 && c.Mana >= c.SpecialManaCost:
-			c.Mana -= c.SpecialManaCost
+		case c.Class != "Priest" && c.SpecialCDTimer == 0:
 			dmg, isCrit := CalcDamage(rng, int(float64(c.Attack)*c.SpecialMult), e.Defense, c.Critical)
 			e.HP -= dmg
 			c.SpecialCDTimer = c.SpecialCD

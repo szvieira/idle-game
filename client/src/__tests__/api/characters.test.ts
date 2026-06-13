@@ -4,8 +4,9 @@ import type { Character } from '../../types/api'
 
 const makeChar = (id: string): Character => ({
   id, name: 'Aldric', class: 'Warrior', level: 1, xp: 0, xp_to_next: 100,
-  gold: 0, hp: 120, max_hp: 120, mana: 30, max_mana: 30,
+  gold: 0, hp: 120, max_hp: 120,
   attack: 15, defense: 10, critical: 5, cdr: 0,
+  special_name: 'Slash', special_mult: 1.5, special_heal: 0, special_cd: 5,
 })
 
 describe('characters API', () => {

@@ -1,0 +1,615 @@
+import Phaser from 'phaser'
+import { GameState } from '../state/GameState'
+import { PaperDollContainer } from '../combat/PaperDollContainer'
+import type { EquipmentSlot } from '../types/api'
+
+export const W = 960, H = 540
+export const FONT = '"Press Start 2P", monospace'
+export const ARENA = { x1: 50, y1: 215, x2: 910, y2: 500 }
+export const SKILL_RADIUS = 150
+const MP_REGEN = 7
+
+export interface SkillDef {
+  name: string
+  mult: number
+  cd: number       // seconds
+  mpCost: number
+  type: 'aoe' | 'dash'
+}
+
+export const SKILLS: Record<string, SkillDef> = {
+  whirlwind: { name:'WHIRLWIND', mult:2.2, cd:6.0, mpCost:35, type:'aoe' },
+  charge:    { name:'CHARGE',    mult:3.4, cd:5.0, mpCost:25, type:'dash' },
+}
+
+export interface CombatEnemyDef {
+  key: string
+  name: string
+  hp: number
+  atk: number
+  atkSpeed: number
+  gold: number
+  speed: number
+  aggro: number
+  range: number
+}
+
+export const ENEMY_TYPES: CombatEnemyDef[] = [
+  { key:'slime',    name:'Slime',    hp:30, atk:4, atkSpeed:2.6, gold:3, speed:55,  aggro:150, range:52 },
+  { key:'bat',      name:'Bat',      hp:22, atk:6, atkSpeed:1.8, gold:4, speed:115, aggro:220, range:50 },
+  { key:'skeleton', name:'Skeleton', hp:45, atk:9, atkSpeed:3.2, gold:7, speed:75,  aggro:180, range:56 },
+]
+
+interface HeroState {
+  maxHp: number; hp: number
+  maxMp: number; mp: number
+  atk: number; def: number; crit: number; critMult: number; cdr: number
+  speed: number
+  nextAtk: number; skillReady: number; castLock: number
+  x: number; y: number
+  doll: PaperDollContainer
+  shadow: Phaser.GameObjects.Ellipse
+  hpBar: Phaser.GameObjects.Graphics
+}
+
+export interface EnemyState {
+  name: string
+  maxHp: number; hp: number
+  atk: number; atkSpeed: number; speed: number
+  aggro: number; range: number; gold: number
+  x: number; y: number; spawnX: number; spawnY: number
+  nextAtk: number
+  sprite: Phaser.GameObjects.Image
+  shadow: Phaser.GameObjects.Ellipse
+  hpBar: Phaser.GameObjects.Graphics
+  dead: boolean; angry: boolean
+  boss: boolean; elite: boolean
+  barW: number; barOff: number
+  wTarget?: { x: number; y: number }; wUntil?: number
+}
+
+export abstract class BaseCombat extends Phaser.Scene {
+  protected hero!: HeroState
+  protected enemies: EnemyState[] = []
+  protected skill!: SkillDef
+  protected moveTo: { x: number; y: number } | null = null
+  protected busy = false
+  protected menuOpen = false
+  protected portal: { x: number; y: number; container: Phaser.GameObjects.Container; label: Phaser.GameObjects.Text } | null = null
+  protected autoSkill = true
+
+  // HUD refs
+  private txtGold!: Phaser.GameObjects.Text
+  private txtLevel!: Phaser.GameObjects.Text
+  private heroHudHp!: Phaser.GameObjects.Graphics
+  private heroHudMp!: Phaser.GameObjects.Graphics
+  private heroHudXp!: Phaser.GameObjects.Graphics
+  private skillBtn!: Phaser.GameObjects.Container
+  private skillCdArc!: Phaser.GameObjects.Graphics
+  private skillMpLbl!: Phaser.GameObjects.Text
+  private autoTxt!: Phaser.GameObjects.Text
+  private txtBanner!: Phaser.GameObjects.Text
+
+  // Accumulated session rewards (client-authoritative)
+  protected sessionXP   = 0
+  protected sessionGold = 0
+  protected sessionItems: string[] = []  // item template names
+
+  font(size: number, color = '#e8e2d0'): Phaser.Types.GameObjects.Text.TextStyle {
+    return { fontFamily: FONT, fontSize: `${size}px`, color,
+             stroke: '#000', strokeThickness: 4 }
+  }
+
+  buildArena(tint: number): void {
+    this.add.rectangle(W/2, H/2, W, H, tint).setDepth(-10)
+    const g = this.add.graphics().setDepth(-6)
+    g.fillStyle(0x141019, 1)
+    g.fillRect(0, ARENA.y1 - 25, W, H - ARENA.y1 + 25)
+    g.fillStyle(0x1b1524, 1)
+    for (let ty = ARENA.y1 - 10; ty < H; ty += 44)
+      for (let tx = (ty % 88 === 0 ? 0 : 44); tx < W; tx += 88)
+        g.fillRect(tx, ty, 42, 42)
+    g.fillStyle(0x241c2e, 1); g.fillRect(0, ARENA.y1 - 28, W, 8)
+    for (let i = 0; i < 8; i++) {
+      this.add.rectangle(
+        Phaser.Math.Between(ARENA.x1, ARENA.x2),
+        Phaser.Math.Between(ARENA.y1, ARENA.y2),
+        Phaser.Math.Between(8, 16), 8, 0x2a2235).setDepth(-4)
+    }
+    // Torches
+    ;[120, 840].forEach(x => {
+      this.add.rectangle(x, 158, 8, 60, 0x4a3b2a).setDepth(-3)
+      const flame = this.add.rectangle(x, 120, 14, 16, 0xffa726).setDepth(-3)
+      this.tweens.add({ targets:flame, scaleY:1.4, alpha:0.7, duration:260, yoyo:true, repeat:-1 })
+    })
+  }
+
+  buildHero(): void {
+    const char = GameState.instance.character!
+    const skills = GameState.instance.skills
+    this.skill = SKILLS[skills.equipped_skill] ?? SKILLS['whirlwind']
+
+    const doll = new PaperDollContainer(this, 130, 360)
+    doll.setDepth(3)
+    // Apply equipped items to doll
+    for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
+      if (item) doll.equip(slot as EquipmentSlot, item.template.name)
+    }
+
+    this.hero = {
+      maxHp: char.max_hp,  hp: char.hp,
+      maxMp: 100,          mp: 100,
+      atk:   char.attack,  def:  char.defense,
+      crit:  char.critical / 100,
+      critMult: 2.0,       cdr:  char.cdr / 100,
+      speed: 175,
+      nextAtk: 0, skillReady: 0, castLock: 0,
+      x: 130, y: 360,
+      doll,
+      shadow: this.add.ellipse(130, 392, 50, 12, 0x000000, 0.35).setDepth(1),
+      hpBar:  this.add.graphics().setDepth(8),
+    }
+  }
+
+  setupInput(): void {
+    this.input.on('pointerdown', (_p: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]) => {
+      if (over.length || this.busy || this.menuOpen) return
+      const p = _p as Phaser.Input.Pointer
+      if (p.worldY < ARENA.y1 - 30) return
+      this.moveTo = {
+        x: Phaser.Math.Clamp(p.worldX, ARENA.x1, ARENA.x2),
+        y: Phaser.Math.Clamp(p.worldY, ARENA.y1, ARENA.y2),
+      }
+      this.showClickMarker(this.moveTo.x, this.moveTo.y)
+    })
+  }
+
+  private showClickMarker(x: number, y: number): void {
+    const r = this.add.circle(x, y, 4).setStrokeStyle(3, 0x5ec05e, 1).setDepth(1)
+    this.tweens.add({ targets:r, alpha:0, duration:350, ease:'Quad.out',
+      onUpdate: () => r.setStrokeStyle(3, 0x5ec05e, Math.max(r.alpha, 0)),
+      onComplete: () => r.destroy() })
+  }
+
+  buildCoreHUD(): void {
+    this.txtGold  = this.add.text(W-16, 14, '', this.font(11,'#ffd34d')).setOrigin(1,0).setDepth(20)
+    this.txtLevel = this.add.text(W-16, 38, '', this.font(9,'#9aa8bd')).setOrigin(1,0).setDepth(20)
+    this.heroHudHp = this.add.graphics().setDepth(20)
+    this.heroHudMp = this.add.graphics().setDepth(20)
+    this.heroHudXp = this.add.graphics().setDepth(20)
+
+    const bx = W-90, by = H-90
+    this.skillCdArc = this.add.graphics()
+    this.skillMpLbl = this.add.text(bx, by-34, this.skill.mpCost+' MP', this.font(7,'#7fd4ff')).setOrigin(0.5)
+    const ring = this.add.circle(bx, by, 44, 0x241c2e).setStrokeStyle(4, 0xffd34d)
+    const icon = this.add.text(bx, by-6, this.skill.type === 'aoe' ? '*' : '>', this.font(26,'#7fd4ff')).setOrigin(0.5)
+    const lbl  = this.add.text(bx, by+28, this.skill.name, this.font(7)).setOrigin(0.5)
+    this.skillBtn = this.add.container(0, 0, [ring, icon, lbl, this.skillMpLbl, this.skillCdArc])
+    this.skillBtn.setDepth(20).setSize(96, 96).setInteractive({ useHandCursor: true })
+    this.skillBtn.on('pointerdown', () => this.tryCastSkill(true))
+
+    this.autoTxt = this.add.text(bx, by+58, 'AUTO: ON', this.font(8,'#5ec05e'))
+      .setOrigin(0.5).setDepth(20).setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => {
+        this.autoSkill = !this.autoSkill
+        this.autoTxt.setText('AUTO: '+(this.autoSkill?'ON':'OFF'))
+          .setColor(this.autoSkill ? '#5ec05e' : '#c03a3a')
+      })
+
+    this.txtBanner = this.add.text(W/2, 130, '', this.font(18,'#ffd34d'))
+      .setOrigin(0.5).setDepth(30).setAlpha(0)
+
+    // Menu button
+    this.add.text(W/2, 18, '= MENU', this.font(11))
+      .setOrigin(0.5,0).setDepth(20).setPadding(10)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.openMenu())
+
+    this.refreshCoreHUD()
+  }
+
+  refreshCoreHUD(): void {
+    const char = GameState.instance.character!
+    this.txtGold.setText('GOLD '+char.gold)
+    this.txtLevel.setText('LV.'+char.level+'  XP '+char.xp+'/'+char.xp_to_next)
+  }
+
+  banner(text: string, color: string): void {
+    this.txtBanner.setText(text).setColor(color).setAlpha(1)
+    this.tweens.add({ targets:this.txtBanner, alpha:0, duration:1800, delay:600, ease:'Quad.in' })
+  }
+
+  // ── Bar drawing ─────────────────────────────────────────────────────────────
+  drawBar(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number, pct: number, color: number): void {
+    g.clear()
+    g.fillStyle(0x1a1a2e, 1); g.fillRect(x, y, w, h)
+    g.fillStyle(color, 1);    g.fillRect(x, y, Math.round(w * Math.max(0, Math.min(1, pct))), h)
+  }
+
+  // ── Movement & physics ──────────────────────────────────────────────────────
+  private moveToward(unit: { x:number;y:number }, tx: number, ty: number, speed: number, dt: number): boolean {
+    const d = Phaser.Math.Distance.Between(unit.x, unit.y, tx, ty)
+    if (d < 2) return false
+    const step = Math.min(speed * dt, d)
+    unit.x += (tx - unit.x) / d * step
+    unit.y += (ty - unit.y) / d * step
+    return true
+  }
+
+  syncHero(): void {
+    const h = this.hero
+    h.x = Phaser.Math.Clamp(h.x, ARENA.x1, ARENA.x2)
+    h.y = Phaser.Math.Clamp(h.y, ARENA.y1, ARENA.y2)
+    h.doll.setPosition(h.x, h.y)
+    h.shadow.setPosition(h.x, h.y + 32)
+  }
+
+  syncEnemy(e: EnemyState): void {
+    e.x = Phaser.Math.Clamp(e.x, ARENA.x1, ARENA.x2)
+    e.y = Phaser.Math.Clamp(e.y, ARENA.y1, ARENA.y2)
+    e.sprite.setPosition(e.x, e.y).setDepth(e.y / 100 + 2)
+    e.shadow.setPosition(e.x, e.y + 32)
+  }
+
+  aliveEnemies(): EnemyState[] { return this.enemies.filter(e => !e.dead) }
+
+  nearestEnemy(pos: {x:number;y:number}): { enemy: EnemyState|null; d: number } {
+    let best: EnemyState|null = null, bd = Infinity
+    this.aliveEnemies().forEach(e => {
+      const d = Phaser.Math.Distance.Between(pos.x, pos.y, e.x, e.y)
+      if (d < bd) { bd = d; best = e }
+    })
+    return { enemy: best, d: bd }
+  }
+
+  enemiesWithin(pos: {x:number;y:number}, r: number): EnemyState[] {
+    return this.aliveEnemies().filter(e => Phaser.Math.Distance.Between(pos.x, pos.y, e.x, e.y) <= r)
+  }
+
+  // ── Base update loop ────────────────────────────────────────────────────────
+  baseUpdate(time: number, delta: number): void {
+    if (!this.hero) return
+    const h  = this.hero
+    const dt = delta / 1000
+
+    h.mp = Math.min(h.maxMp, h.mp + MP_REGEN * dt)
+    if (!this.enemiesWithin(h, 240).length && h.hp < h.maxHp && !this.busy) {
+      h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.03 * dt)
+    }
+
+    this.drawBar(this.heroHudHp, 20, H-72, 240, 14, h.hp/h.maxHp, 0x5ec05e)
+    this.drawBar(this.heroHudMp, 20, H-52, 240, 10, h.mp/h.maxMp, 0x4da3ff)
+    const char = GameState.instance.character!
+    this.drawBar(this.heroHudXp, 20, H-36, 240, 6, char.xp/char.xp_to_next, 0xffd34d)
+    this.drawBar(h.hpBar, h.x-28, h.y-52, 56, 6, h.hp/h.maxHp, 0x5ec05e)
+    this.aliveEnemies().forEach(e =>
+      this.drawBar(e.hpBar, e.x - e.barW/2, e.y - e.barOff, e.barW, 6, e.hp/e.maxHp, 0xc03a3a))
+
+    // Skill cooldown arc
+    const cdLeft = Math.max(0, h.skillReady - time)
+    this.skillCdArc.clear()
+    if (cdLeft > 0) {
+      const frac = cdLeft / (this.skill.cd * 1000 * (1 - h.cdr))
+      this.skillCdArc.fillStyle(0x000000, 0.6)
+      this.skillCdArc.slice(W-90, H-90, 44, -Math.PI/2, -Math.PI/2 + frac*Math.PI*2, false)
+      this.skillCdArc.fillPath()
+    }
+    this.skillMpLbl.setColor(h.mp >= this.skill.mpCost ? '#7fd4ff' : '#c03a3a')
+
+    if (this.busy || this.menuOpen) return
+    this.updateHero(time, dt)
+    this.updateEnemies(time, dt)
+    this.separateEnemies()
+    this.checkPortal()
+  }
+
+  private updateHero(time: number, dt: number): void {
+    const h = this.hero
+    if (time < h.castLock) { this.syncHero(); return }
+
+    if (this.moveTo) {
+      const moved = this.moveToward(h, this.moveTo.x, this.moveTo.y, h.speed, dt)
+      if (!moved || Phaser.Math.Distance.Between(h.x, h.y, this.moveTo.x, this.moveTo.y) < 4)
+        this.moveTo = null
+    } else if (this.autoSkill) {
+      const { enemy, d } = this.nearestEnemy(h)
+      if (enemy) {
+        if (d > 64) this.moveToward(h, enemy.x, enemy.y, h.speed, dt)
+        else h.doll.setFlipX(enemy.x < h.x)
+      } else if (this.portal) {
+        this.moveToward(h, this.portal.x, this.portal.y, h.speed, dt)
+      }
+    }
+    this.syncHero()
+
+    const { enemy, d } = this.nearestEnemy(h)
+    if (enemy && d <= 72 && time >= h.nextAtk) {
+      h.nextAtk = time + 1200
+      const isCrit = Math.random() < h.crit
+      const dmg    = Math.round(h.atk * (0.85 + Math.random()*0.3) * (isCrit ? h.critMult : 1))
+      h.doll.setFlipX(enemy.x < h.x)
+      this.jabAnim(h, enemy)
+      this.slashFx(enemy.x, enemy.y, isCrit)
+      this.applyDamage(enemy, dmg, isCrit)
+    }
+
+    if (this.autoSkill && time >= h.skillReady && h.mp >= this.skill.mpCost) {
+      if (this.skill.type === 'aoe' && this.enemiesWithin(h, SKILL_RADIUS).length >= 2)
+        this.tryCastSkill(false)
+      else if (this.skill.type === 'dash') {
+        const { enemy: e2, d: d2 } = this.nearestEnemy(h)
+        if (e2 && d2 > 110) this.tryCastSkill(false)
+      }
+    }
+  }
+
+  private updateEnemies(time: number, dt: number): void {
+    const h = this.hero
+    this.aliveEnemies().forEach(e => {
+      const d = Phaser.Math.Distance.Between(e.x, e.y, h.x, h.y)
+      if (d <= e.aggro || e.angry) {
+        e.angry = true
+        if (d > e.range) {
+          this.moveToward(e, h.x, h.y, e.speed, dt)
+        } else {
+          e.sprite.setFlipX(h.x < e.x)
+          if (time >= e.nextAtk) {
+            e.nextAtk = time + e.atkSpeed * 1000
+            this.enemyStrike(e)
+          }
+        }
+      } else {
+        if (!e.wTarget || Phaser.Math.Distance.Between(e.x, e.y, e.wTarget.x, e.wTarget.y) < 6
+            || time > (e.wUntil ?? 0)) {
+          e.wTarget = {
+            x: Phaser.Math.Clamp(e.spawnX + Phaser.Math.Between(-50,50), ARENA.x1, ARENA.x2),
+            y: Phaser.Math.Clamp(e.spawnY + Phaser.Math.Between(-35,35), ARENA.y1, ARENA.y2),
+          }
+          e.wUntil = time + Phaser.Math.Between(1500, 3200)
+        }
+        this.moveToward(e, e.wTarget.x, e.wTarget.y, e.speed * 0.4, dt)
+      }
+      this.syncEnemy(e)
+    })
+  }
+
+  private separateEnemies(): void {
+    const list = this.aliveEnemies()
+    for (let i = 0; i < list.length; i++) for (let j = i+1; j < list.length; j++) {
+      const a = list[i], b = list[j]
+      const d = Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y)
+      const min = 34
+      if (d > 0 && d < min) {
+        const push = (min - d) / 2
+        const nx = (b.x - a.x) / d, ny = (b.y - a.y) / d
+        a.x -= nx * push; a.y -= ny * push
+        b.x += nx * push; b.y += ny * push
+      }
+    }
+  }
+
+  // ── Combat ──────────────────────────────────────────────────────────────────
+  private enemyStrike(e: EnemyState): void {
+    const h = this.hero
+    const dmg = Math.max(1, Math.round(e.atk * (0.85 + Math.random()*0.3) - h.def))
+    this.jabAnim(e, h)
+    h.hp = Math.max(0, h.hp - dmg)
+    this.tweens.add({ targets:h.doll, alpha:0.2, duration:60, yoyo:true })
+    this.floatDamage(h.x, h.y - 56, dmg, '#ff7a6e', false)
+    this.cameras.main.shake(60, 0.002)
+    if (h.hp <= 0) this.onHeroDown()
+  }
+
+  applyDamage(e: EnemyState, dmg: number, isCrit: boolean, color?: string): void {
+    if (e.dead) return
+    e.hp -= dmg; e.angry = true
+    this.hitFlash(e.sprite)
+    this.floatDamage(e.x, e.y - e.barOff - 4, dmg, color ?? (isCrit ? '#ffffff' : '#ffdd88'), isCrit)
+    if (e.hp <= 0) this.killEnemy(e)
+  }
+
+  killEnemy(e: EnemyState): void {
+    e.dead = true; e.hp = 0; e.hpBar.clear()
+    e.shadow.destroy()
+    this.tweens.add({ targets:e.sprite, alpha:0, y:`+=14`, angle:90,
+      duration:350, onComplete: () => e.sprite.destroy() })
+    this.onEnemyKilled(e)
+    if (!this.aliveEnemies().length) this.onRoomCleared()
+  }
+
+  tryCastSkill(manual: boolean): void {
+    const now = this.time.now, h = this.hero
+    const cdMs = this.skill.cd * 1000 * (1 - h.cdr)
+    if (this.busy || now < h.skillReady || h.mp < this.skill.mpCost) {
+      if (manual) this.tweens.add({ targets:this.skillBtn, x:'+=4', duration:40, yoyo:true, repeat:2 })
+      return
+    }
+    h.mp -= this.skill.mpCost
+    h.skillReady = now + cdMs
+    if (this.skill.type === 'aoe') {
+      h.castLock = now + 650
+      this.castWhirlwind()
+    } else {
+      h.castLock = now + 520
+      this.castCharge()
+    }
+  }
+
+  private castWhirlwind(): void {
+    const h = this.hero
+    this.banner('WHIRLWIND!', '#7fd4ff')
+    this.tweens.add({ targets:h.doll, angle:720, duration:520, ease:'Cubic.out',
+      onComplete: () => h.doll.setAngle(0) })
+    const ring = this.add.circle(h.x, h.y, 12).setDepth(9).setStrokeStyle(6, 0x7fd4ff, 1)
+    this.tweens.add({ targets:ring, radius:SKILL_RADIUS, alpha:0, duration:480, ease:'Quad.out',
+      onUpdate: () => ring.setStrokeStyle(6, 0x7fd4ff, Math.max(ring.alpha, 0)),
+      onComplete: () => ring.destroy() })
+    this.cameras.main.shake(180, 0.006)
+    this.time.delayedCall(160, () => {
+      const dmg = Math.round(h.atk * this.skill.mult)
+      this.enemiesWithin(h, SKILL_RADIUS).forEach(e => this.applyDamage(e, dmg, false, '#7fd4ff'))
+    })
+  }
+
+  private castCharge(): void {
+    const h = this.hero
+    const { enemy } = this.nearestEnemy(h)
+    if (!enemy) return
+    const tx = Phaser.Math.Clamp(enemy.x - 30 * Math.sign(enemy.x - h.x), ARENA.x1, ARENA.x2)
+    const ty = Phaser.Math.Clamp(enemy.y, ARENA.y1, ARENA.y2)
+    this.banner('CHARGE!', '#ffd34d')
+    this.tweens.add({ targets:h, x:tx, y:ty, duration:220, ease:'Cubic.in',
+      onUpdate: () => this.syncHero(),
+      onComplete: () => {
+        this.cameras.main.shake(150, 0.006)
+        const dmg = Math.round(h.atk * this.skill.mult)
+        this.applyDamage(enemy, dmg, true, '#ffd34d')
+        this.enemiesWithin(enemy, 70).forEach(e => {
+          if (e !== enemy) this.applyDamage(e, Math.round(dmg * 0.4), false, '#ffd34d')
+        })
+      },
+    })
+  }
+
+  // ── VFX ─────────────────────────────────────────────────────────────────────
+  private jabAnim(from: {x:number;y:number}, to: {x:number;y:number}): void {
+    const line = this.add.graphics().setDepth(9)
+    line.lineStyle(2, 0xffffff, 0.7)
+    line.strokeLineShape(new Phaser.Geom.Line(from.x, from.y, to.x, to.y))
+    this.tweens.add({ targets:line, alpha:0, duration:120, onComplete: () => line.destroy() })
+  }
+
+  slashFx(x: number, y: number, crit: boolean): void {
+    const color = crit ? 0xffffff : 0xffdd88
+    for (let i = 0; i < (crit ? 5 : 3); i++) {
+      const p = this.add.rectangle(
+        x + Phaser.Math.Between(-16,16), y + Phaser.Math.Between(-16,16),
+        crit ? 6 : 4, crit ? 6 : 4, color).setDepth(9)
+      this.tweens.add({ targets:p, x:`+=${Phaser.Math.Between(-24,24)}`,
+        y:`+=${Phaser.Math.Between(-24,24)}`, alpha:0, duration:300,
+        onComplete: () => p.destroy() })
+    }
+  }
+
+  private hitFlash(sprite: Phaser.GameObjects.Image): void {
+    this.tweens.add({ targets:sprite, alpha:0.2, duration:60, yoyo:true })
+  }
+
+  floatDamage(x: number, y: number, dmg: number, color: string, crit: boolean): void {
+    const size = crit ? 16 : 12
+    const txt = this.add.text(x, y, String(dmg), this.font(size, color)).setOrigin(0.5).setDepth(15)
+    this.tweens.add({ targets:txt, y:y-48, alpha:0, duration:crit?900:700,
+      ease:'Quad.out', onComplete: () => txt.destroy() })
+  }
+
+  floatText(x: number, y: number, text: string, color: string): void {
+    const txt = this.add.text(x, y, text, this.font(10, color)).setOrigin(0.5).setDepth(15)
+    this.tweens.add({ targets:txt, y:y-40, alpha:0, duration:800,
+      ease:'Quad.out', onComplete: () => txt.destroy() })
+  }
+
+  // ── Portal ───────────────────────────────────────────────────────────────────
+  spawnPortal(): void {
+    const px = Phaser.Math.Clamp(this.hero.x + 150, ARENA.x1 + 60, ARENA.x2 - 60)
+    const py = Phaser.Math.Clamp(this.hero.y, ARENA.y1 + 40, ARENA.y2 - 40)
+    const outer = this.add.circle(0,0,36).setStrokeStyle(5, 0x7fd4ff, 0.9)
+    const inner = this.add.circle(0,0,20, 0x7fd4ff, 0.25)
+    this.tweens.add({ targets:inner, scale:1.5, alpha:0.08, duration:700, yoyo:true, repeat:-1 })
+    const c = this.add.container(px, py, [outer, inner]).setDepth(py/100+2)
+    this.tweens.add({ targets:c, y:py-6, duration:800, yoyo:true, repeat:-1, ease:'Sine.inOut' })
+    const lbl = this.add.text(px, py-56, 'PORTAL', this.font(8,'#7fd4ff')).setOrigin(0.5).setDepth(20)
+    this.portal = { x:px, y:py, container:c, label:lbl }
+    this.banner('PORTAL OPEN!', '#7fd4ff')
+  }
+
+  removePortal(): void {
+    if (!this.portal) return
+    this.portal.container.destroy()
+    this.portal.label.destroy()
+    this.portal = null
+  }
+
+  checkPortal(): void {
+    if (!this.portal) return
+    const d = Phaser.Math.Distance.Between(this.hero.x, this.hero.y, this.portal.x, this.portal.y)
+    if (d < 48) this.nextRoom()
+  }
+
+  // ── Enemy spawning ───────────────────────────────────────────────────────────
+  spawnEnemyObj(def: CombatEnemyDef, scale: number, pos: {x:number;y:number}): EnemyState {
+    const hp = Math.round(def.hp * scale)
+    const e: EnemyState = {
+      name: def.name,
+      maxHp: hp, hp,
+      atk:      Math.round(def.atk * scale),
+      atkSpeed: def.atkSpeed,
+      speed:    def.speed,
+      aggro:    def.aggro,
+      range:    def.range,
+      gold:     Math.round(def.gold * scale),
+      x: pos.x, y: pos.y, spawnX: pos.x, spawnY: pos.y,
+      nextAtk: this.time.now + def.atkSpeed * 1000 * (0.6 + Math.random()*0.8),
+      sprite: this.add.image(pos.x, pos.y, `spr_${def.key}`)
+        .setFlipX(true).setScale(0).setDepth(pos.y/100+2),
+      shadow: this.add.ellipse(pos.x, pos.y+32, 46, 11, 0x000000, 0.3).setDepth(1),
+      hpBar: this.add.graphics().setDepth(8),
+      dead:false, angry:false, boss:false, elite:false,
+      barW:56, barOff:48,
+    }
+    this.tweens.add({ targets:e.sprite, scale:1, duration:320, ease:'Back.out' })
+    return e
+  }
+
+  spawnPacks(total: number, scale: number, pool: CombatEnemyDef[]): EnemyState[] {
+    const enemies: EnemyState[] = []
+    let remaining = total
+    const centers: {x:number;y:number}[] = []
+    while (remaining > 0) {
+      const packSize = Math.min(remaining, Phaser.Math.Between(2,3))
+      remaining -= packSize
+      let cx=0, cy=0, tries=0
+      do {
+        cx = Phaser.Math.Between(ARENA.x1+200, ARENA.x2-40)
+        cy = Phaser.Math.Between(ARENA.y1+30, ARENA.y2-30)
+        tries++
+      } while (tries < 20 && (
+        Phaser.Math.Distance.Between(cx, cy, this.hero.x, this.hero.y) < 240 ||
+        centers.some(c => Phaser.Math.Distance.Between(c.x, c.y, cx, cy) < 170)
+      ))
+      centers.push({x:cx,y:cy})
+      for (let i = 0; i < packSize; i++) {
+        const def = Phaser.Utils.Array.GetRandom(pool)
+        const ang = (i / packSize) * Math.PI * 2 + Math.random()
+        enemies.push(this.spawnEnemyObj(def, scale, {
+          x: Phaser.Math.Clamp(cx + Math.cos(ang)*38, ARENA.x1, ARENA.x2),
+          y: Phaser.Math.Clamp(cy + Math.sin(ang)*28, ARENA.y1, ARENA.y2),
+        }))
+      }
+    }
+    return enemies
+  }
+
+  // ── Menu ─────────────────────────────────────────────────────────────────────
+  openMenu(): void {
+    if (this.menuOpen) return
+    this.menuOpen = true
+    const c = this.add.container(0, 0).setDepth(50)
+    c.add(this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.7))
+    const options = this.menuOptions()
+    options.forEach((opt, i) => {
+      const y = H/2 - ((options.length-1) * 36)/2 + i * 36
+      const btn = this.add.rectangle(W/2, y, 380, 32, 0x1a1a2e)
+        .setStrokeStyle(1, 0x334455).setInteractive({ useHandCursor: true })
+      const lbl = this.add.text(W/2, y, opt.label, this.font(10, opt.color ?? '#e8e2d0')).setOrigin(0.5)
+      c.add([btn, lbl])
+      btn.on('pointerdown', () => { c.destroy(); this.menuOpen = false; opt.onPick() })
+    })
+  }
+
+  // ── Abstract/overridable hooks ────────────────────────────────────────────────
+  protected abstract menuOptions(): Array<{ label: string; color?: string; onPick: () => void }>
+  protected abstract onEnemyKilled(e: EnemyState): void
+  protected abstract onRoomCleared(): void
+  protected abstract nextRoom(): void
+  protected abstract onHeroDown(): void
+}

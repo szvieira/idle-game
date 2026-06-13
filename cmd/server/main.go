@@ -6,31 +6,49 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 
 	"game/internal/db"
+	"game/internal/presence"
+	"game/internal/raid"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type server struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	hub     *presence.Hub
+	raidsMu sync.Mutex
+	raids   map[string]*raid.Engine
 }
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health",                  s.handleHealth)
-	mux.HandleFunc("POST /accounts",               s.handleCreateAccount)
-	mux.HandleFunc("POST /characters",             s.handleCreateCharacter)
-	mux.HandleFunc("GET /characters/{id}",         s.handleGetCharacter)
-	mux.HandleFunc("POST /dungeon-runs",            s.handleCreateDungeonRun)
-	mux.HandleFunc("GET /dungeon-runs/{id}",        s.handleGetDungeonRun)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /accounts", s.handleCreateAccount)
+	mux.HandleFunc("POST /characters", s.handleCreateCharacter)
+	mux.HandleFunc("GET /characters/{id}", s.handleGetCharacter)
+	mux.HandleFunc("POST /dungeon-runs", s.handleCreateDungeonRun)
+	mux.HandleFunc("GET /dungeon-runs/{id}", s.handleGetDungeonRun)
 	mux.HandleFunc("POST /dungeon-runs/{id}/claim", s.handleClaimDungeonRun)
-	mux.HandleFunc("POST /expedition-runs",                  s.handleStartExpedition)
-	mux.HandleFunc("GET /expedition-runs/{id}",              s.handleGetExpedition)
-	mux.HandleFunc("POST /expedition-runs/{id}/collect",     s.handleCollectExpedition)
-	mux.HandleFunc("POST /expedition-runs/{id}/pause",       s.handlePauseExpedition)
-	mux.HandleFunc("POST /expedition-runs/{id}/resume",      s.handleResumeExpedition)
-	mux.HandleFunc("POST /expedition-runs/{id}/zone",        s.handleSwitchZone)
+	mux.HandleFunc("POST /expedition-runs", s.handleStartExpedition)
+	mux.HandleFunc("GET /expedition-runs/{id}", s.handleGetExpedition)
+	mux.HandleFunc("POST /expedition-runs/{id}/collect", s.handleCollectExpedition)
+	mux.HandleFunc("POST /expedition-runs/{id}/pause", s.handlePauseExpedition)
+	mux.HandleFunc("POST /expedition-runs/{id}/resume", s.handleResumeExpedition)
+	mux.HandleFunc("POST /expedition-runs/{id}/zone", s.handleSwitchZone)
+	mux.HandleFunc("POST /expedition-runs/{id}/complete", s.handleCompleteExpedition)
+	mux.HandleFunc("POST /dungeon-complete", s.handleCompleteDungeon)
+	mux.HandleFunc("GET /characters/{id}/inventory", s.handleGetInventory)
+	mux.HandleFunc("GET /characters/{id}/equipped", s.handleGetEquipped)
+	mux.HandleFunc("POST /characters/{id}/equipment/{slot}", s.handleEquip)
+	mux.HandleFunc("DELETE /characters/{id}/equipment/{slot}", s.handleUnequip)
+	mux.HandleFunc("GET /characters/{id}/skills", s.handleGetSkills)
+	mux.HandleFunc("POST /characters/{id}/skills/{nodeId}/unlock", s.handleUnlockSkill)
+	mux.HandleFunc("PUT /characters/{id}/skills/equipped", s.handleEquipSkill)
+	mux.HandleFunc("GET /ws/presence", s.handlePresence)
+	mux.HandleFunc("POST /raid-runs", s.handleStartRaid)
+	mux.HandleFunc("GET /ws/raid", s.handleRaidWS)
 	return cors(mux)
 }
 
@@ -56,7 +74,7 @@ func main() {
 		log.Fatalf("run migrations: %v", err)
 	}
 
-	s := &server{pool: pool}
+	s := &server{pool: pool, hub: presence.NewHub(), raids: make(map[string]*raid.Engine)}
 	log.Printf("server listening on %s", addr)
 	if err := http.ListenAndServe(addr, s.routes()); err != nil {
 		log.Fatal(err)

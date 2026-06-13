@@ -1,0 +1,2 @@
+ALTER TABLE characters DROP COLUMN IF EXISTS mana;
+ALTER TABLE characters DROP COLUMN IF EXISTS max_mana;

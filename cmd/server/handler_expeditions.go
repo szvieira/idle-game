@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"game/internal/character"
 	"game/internal/expedition"
 
 	"github.com/jackc/pgx/v5"
@@ -26,13 +27,14 @@ type expeditionRun struct {
 }
 
 type expeditionRunResponse struct {
-	ID             string    `json:"id"`
-	CharacterID    string    `json:"character_id"`
-	ZoneID         string    `json:"zone_id"`
-	ZoneName       string    `json:"zone_name"`
-	Status         string    `json:"status"`
-	StartedAt      time.Time `json:"started_at"`
-	ElapsedSeconds int64     `json:"elapsed_seconds"`
+	ID             string          `json:"id"`
+	CharacterID    string          `json:"character_id"`
+	ZoneID         string          `json:"zone_id"`
+	ZoneName       string          `json:"zone_name"`
+	Status         string          `json:"status"`
+	StartedAt      time.Time       `json:"started_at"`
+	ElapsedSeconds int64           `json:"elapsed_seconds"`
+	Zone           zoneDefResponse `json:"zone_def"`
 }
 
 type collectExpeditionResponse struct {
@@ -49,6 +51,38 @@ type switchZoneResponse struct {
 	ZoneID   string                    `json:"zone_id"`
 	ZoneName string                    `json:"zone_name"`
 	Collect  collectExpeditionResponse `json:"collect"`
+}
+
+type enemyDefResponse struct {
+	Name    string `json:"name"`
+	HP      int    `json:"hp"`
+	Attack  int    `json:"attack"`
+	Defense int    `json:"defense"`
+}
+
+type zoneRoomDefResponse struct {
+	XP      int                `json:"xp"`
+	Gold    int                `json:"gold"`
+	Enemies []enemyDefResponse `json:"enemies"`
+}
+
+type zoneDefResponse struct {
+	ID       string               `json:"id"`
+	Name     string               `json:"name"`
+	MinLevel int                  `json:"min_level"`
+	Rooms    []zoneRoomDefResponse `json:"rooms"`
+}
+
+func zoneToResponse(z *expedition.Zone) zoneDefResponse {
+	rooms := make([]zoneRoomDefResponse, len(z.Rooms))
+	for i, r := range z.Rooms {
+		enemies := make([]enemyDefResponse, len(r.Enemies))
+		for j, e := range r.Enemies {
+			enemies[j] = enemyDefResponse{Name: e.Name, HP: e.HP, Attack: e.Attack, Defense: e.Defense}
+		}
+		rooms[i] = zoneRoomDefResponse{XP: r.XP, Gold: r.Gold, Enemies: enemies}
+	}
+	return zoneDefResponse{ID: z.ID, Name: z.Name, MinLevel: z.MinLevel, Rooms: rooms}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -78,21 +112,23 @@ func elapsedSeconds(run *expeditionRun) int64 {
 
 func buildCharResp(sc *serverChar, result expedition.CollectResult) characterResponse {
 	return characterResponse{
-		ID:       sc.id,
-		Name:     sc.name,
-		Class:    sc.c.Class,
-		Level:    result.NewLevel,
-		XP:       result.NewXP,
-		XPToNext: result.NewXPToNext,
-		Gold:     result.NewGold,
-		HP:       result.NewHP,
-		MaxHP:    result.NewMaxHP,
-		Mana:     sc.c.Mana,
-		MaxMana:  sc.c.MaxMana,
-		Attack:   result.NewAttack,
-		Defense:  sc.c.Defense,
-		Critical: sc.c.Critical,
-		CDR:      sc.c.CDR,
+		ID:          sc.id,
+		Name:        sc.name,
+		Class:       sc.c.Class,
+		Level:       result.NewLevel,
+		XP:          result.NewXP,
+		XPToNext:    result.NewXPToNext,
+		Gold:        result.NewGold,
+		HP:          result.NewHP,
+		MaxHP:       result.NewMaxHP,
+		Attack:      result.NewAttack,
+		Defense:     sc.c.Defense,
+		Critical:    sc.c.Critical,
+		CDR:         sc.c.CDR,
+		SpecialName: sc.c.SpecialName,
+		SpecialMult: sc.c.SpecialMult,
+		SpecialHeal: sc.c.SpecialHeal,
+		SpecialCD:   sc.c.SpecialCD,
 	}
 }
 
@@ -169,16 +205,20 @@ func (s *server) persistCollect(r *http.Request, charID, runID, newZoneID string
 	return loot, nil
 }
 
-func runToResponse(run *expeditionRun, zoneName string) expeditionRunResponse {
-	return expeditionRunResponse{
+func runToResponse(run *expeditionRun, zone *expedition.Zone) expeditionRunResponse {
+	resp := expeditionRunResponse{
 		ID:             run.id,
 		CharacterID:    run.characterID,
 		ZoneID:         run.zoneID,
-		ZoneName:       zoneName,
 		Status:         run.status,
 		StartedAt:      run.startedAt,
 		ElapsedSeconds: elapsedSeconds(run),
 	}
+	if zone != nil {
+		resp.ZoneName = zone.Name
+		resp.Zone = zoneToResponse(zone)
+	}
+	return resp
 }
 
 // ── POST /expedition-runs ─────────────────────────────────────────────────────
@@ -240,12 +280,9 @@ func (s *server) handleStartExpedition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run may already exist with a different zone; use the actual run's zone name
-	actualZoneName := run.zoneID
-	if z := expedition.GetZone(run.zoneID); z != nil {
-		actualZoneName = z.Name
-	}
-	writeJSON(w, http.StatusCreated, runToResponse(run, actualZoneName))
+	// Run may already exist with a different zone; use the actual run's zone
+	actualZone := expedition.GetZone(run.zoneID)
+	writeJSON(w, http.StatusCreated, runToResponse(run, actualZone))
 }
 
 // ── GET /expedition-runs/{id} ─────────────────────────────────────────────────
@@ -262,12 +299,8 @@ func (s *server) handleGetExpedition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zoneName := run.zoneID
-	if z := expedition.GetZone(run.zoneID); z != nil {
-		zoneName = z.Name
-	}
-
-	writeJSON(w, http.StatusOK, runToResponse(run, zoneName))
+	zone := expedition.GetZone(run.zoneID)
+	writeJSON(w, http.StatusOK, runToResponse(run, zone))
 }
 
 // ── POST /expedition-runs/{id}/collect ───────────────────────────────────────
@@ -485,5 +518,150 @@ func (s *server) handleSwitchZone(w http.ResponseWriter, r *http.Request) {
 			Character:      charResp,
 			Loot:           loot,
 		},
+	})
+}
+
+// ── POST /expedition-runs/{id}/complete ──────────────────────────────────────
+
+type completeExpeditionRequest struct {
+	XP    int      `json:"xp"`
+	Gold  int      `json:"gold"`
+	Items []string `json:"items"` // item template names
+}
+
+type completeExpeditionResponse struct {
+	Character  characterResponse       `json:"character"`
+	ItemsAdded []inventoryItemResponse `json:"items_added"`
+}
+
+func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+
+	var req completeExpeditionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.XP < 0 || req.Gold < 0 {
+		writeError(w, http.StatusBadRequest, "xp and gold must be non-negative")
+		return
+	}
+
+	// Load run to get character_id and verify it's active
+	var charID string
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT character_id FROM expedition_runs
+		WHERE id = $1 AND status = 'active'
+	`, runID).Scan(&charID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "expedition run not found or already completed")
+		return
+	}
+	if err != nil {
+		log.Printf("complete expedition load run: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load run")
+		return
+	}
+
+	// Begin transaction
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		log.Printf("complete expedition begin tx: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Apply XP and gold, check level-up
+	sc, err := s.loadChar(r.Context(), charID)
+	if err != nil {
+		log.Printf("complete expedition load char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load character")
+		return
+	}
+	sc.c.XP += req.XP
+	sc.gold += req.Gold
+	character.CheckLevelUp(sc.c, character.NopLevelUpHandler{})
+
+	_, err = tx.Exec(r.Context(), `
+		UPDATE characters
+		SET xp = $1, xp_to_next = $2, level = $3, gold = $4,
+		    hp = $5, max_hp = $6, attack = $7, defense = $8, critical = $9, cdr = $10
+		WHERE id = $11
+	`, sc.c.XP, sc.c.XPToNext, sc.c.Level, sc.gold,
+		sc.c.HP, sc.c.MaxHP, sc.c.Attack, sc.c.Defense, sc.c.Critical, sc.c.CDR,
+		charID)
+	if err != nil {
+		log.Printf("complete expedition update char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update character")
+		return
+	}
+
+	// Add items to inventory (looked up by template name; unknown names are skipped)
+	var itemsAdded []inventoryItemResponse
+	for _, itemName := range req.Items {
+		var item inventoryItemResponse
+		err := tx.QueryRow(r.Context(), `
+			SELECT id, name, slot, rarity, source,
+			       attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+			FROM item_templates WHERE name = $1
+		`, itemName).Scan(
+			&item.Template.ID, &item.Template.Name, &item.Template.Slot,
+			&item.Template.Rarity, &item.Template.Source,
+			&item.Template.AttackBonus, &item.Template.DefenseBonus, &item.Template.HPBonus,
+			&item.Template.CritBonus, &item.Template.CDRBonus,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("complete expedition unknown item %q, skipping", itemName)
+			continue
+		}
+		if err != nil {
+			log.Printf("complete expedition load template %q: %v", itemName, err)
+			writeError(w, http.StatusInternalServerError, "could not load item template")
+			return
+		}
+		err = tx.QueryRow(r.Context(), `
+			INSERT INTO inventory_items (character_id, item_template_id)
+			VALUES ($1, $2)
+			RETURNING id, character_id, item_template_id
+		`, charID, item.Template.ID).Scan(&item.ID, &item.CharacterID, &item.ItemTemplateID)
+		if err != nil {
+			log.Printf("complete expedition insert item %q: %v", itemName, err)
+			writeError(w, http.StatusInternalServerError, "could not add item")
+			return
+		}
+		itemsAdded = append(itemsAdded, item)
+	}
+
+	// Mark run completed
+	_, err = tx.Exec(r.Context(), `
+		UPDATE expedition_runs SET status = 'completed' WHERE id = $1
+	`, runID)
+	if err != nil {
+		log.Printf("complete expedition mark completed: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not complete run")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("complete expedition commit: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction commit failed")
+		return
+	}
+
+	// Return effective character stats (with item bonuses)
+	scEff, err := s.loadCharEffective(r.Context(), charID)
+	if err != nil {
+		log.Printf("complete expedition reload char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not reload character")
+		return
+	}
+
+	if itemsAdded == nil {
+		itemsAdded = []inventoryItemResponse{}
+	}
+	writeJSON(w, http.StatusOK, completeExpeditionResponse{
+		Character:  scEff.toResponse(),
+		ItemsAdded: itemsAdded,
 	})
 }

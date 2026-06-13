@@ -16,21 +16,23 @@ import (
 // ── Shared types ──────────────────────────────────────────────────────────────
 
 type characterResponse struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Class    string `json:"class"`
-	Level    int    `json:"level"`
-	XP       int    `json:"xp"`
-	XPToNext int    `json:"xp_to_next"`
-	Gold     int    `json:"gold"`
-	HP       int    `json:"hp"`
-	MaxHP    int    `json:"max_hp"`
-	Mana     int    `json:"mana"`
-	MaxMana  int    `json:"max_mana"`
-	Attack   int    `json:"attack"`
-	Defense  int    `json:"defense"`
-	Critical int    `json:"critical"`
-	CDR      int    `json:"cdr"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Class       string  `json:"class"`
+	Level       int     `json:"level"`
+	XP          int     `json:"xp"`
+	XPToNext    int     `json:"xp_to_next"`
+	Gold        int     `json:"gold"`
+	HP          int     `json:"hp"`
+	MaxHP       int     `json:"max_hp"`
+	Attack      int     `json:"attack"`
+	Defense     int     `json:"defense"`
+	Critical    int     `json:"critical"`
+	CDR         int     `json:"cdr"`
+	SpecialName string  `json:"special_name"`
+	SpecialMult float64 `json:"special_mult"`
+	SpecialHeal int     `json:"special_heal"`
+	SpecialCD   int     `json:"special_cd"`
 }
 
 // serverChar holds DB-only fields alongside the combat character.
@@ -43,21 +45,23 @@ type serverChar struct {
 
 func (sc *serverChar) toResponse() characterResponse {
 	return characterResponse{
-		ID:       sc.id,
-		Name:     sc.name,
-		Class:    sc.c.Class,
-		Level:    sc.c.Level,
-		XP:       sc.c.XP,
-		XPToNext: sc.c.XPToNext,
-		Gold:     sc.gold,
-		HP:       sc.c.HP,
-		MaxHP:    sc.c.MaxHP,
-		Mana:     sc.c.Mana,
-		MaxMana:  sc.c.MaxMana,
-		Attack:   sc.c.Attack,
-		Defense:  sc.c.Defense,
-		Critical: sc.c.Critical,
-		CDR:      sc.c.CDR,
+		ID:          sc.id,
+		Name:        sc.name,
+		Class:       sc.c.Class,
+		Level:       sc.c.Level,
+		XP:          sc.c.XP,
+		XPToNext:    sc.c.XPToNext,
+		Gold:        sc.gold,
+		HP:          sc.c.HP,
+		MaxHP:       sc.c.MaxHP,
+		Attack:      sc.c.Attack,
+		Defense:     sc.c.Defense,
+		Critical:    sc.c.Critical,
+		CDR:         sc.c.CDR,
+		SpecialName: sc.c.SpecialName,
+		SpecialMult: sc.c.SpecialMult,
+		SpecialHeal: sc.c.SpecialHeal,
+		SpecialCD:   sc.c.SpecialCD,
 	}
 }
 
@@ -66,18 +70,91 @@ func (s *server) loadChar(ctx context.Context, id string) (*serverChar, error) {
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, gold,
 		       class, level, xp, xp_to_next,
-		       hp, max_hp, mana, max_mana, attack, defense, critical, cdr
+		       hp, max_hp, attack, defense, critical, cdr
 		FROM characters WHERE id = $1
 	`, id).Scan(
 		&sc.id, &sc.name, &sc.gold,
 		&sc.c.Class, &sc.c.Level, &sc.c.XP, &sc.c.XPToNext,
-		&sc.c.HP, &sc.c.MaxHP, &sc.c.Mana, &sc.c.MaxMana,
+		&sc.c.HP, &sc.c.MaxHP,
 		&sc.c.Attack, &sc.c.Defense, &sc.c.Critical, &sc.c.CDR,
 	)
 	if err != nil {
 		return nil, err
 	}
 	character.ApplyClassSkills(sc.c)
+	return sc, nil
+}
+
+// loadEquipmentBonuses fetches the stat bonuses of all items equipped by character.
+func (s *server) loadEquipmentBonuses(ctx context.Context, charID string) ([]character.EquippedBonus, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT it.attack_bonus, it.defense_bonus, it.hp_bonus, it.crit_bonus, it.cdr_bonus
+		FROM equipment e
+		JOIN inventory_items ii ON ii.id = e.inventory_item_id
+		JOIN item_templates  it ON it.id = ii.item_template_id
+		WHERE e.character_id = $1
+		  AND e.inventory_item_id IS NOT NULL
+	`, charID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bonuses []character.EquippedBonus
+	for rows.Next() {
+		var b character.EquippedBonus
+		if err := rows.Scan(&b.AttackBonus, &b.DefenseBonus, &b.HPBonus,
+			&b.CritBonus, &b.CDRBonus); err != nil {
+			return nil, err
+		}
+		bonuses = append(bonuses, b)
+	}
+	return bonuses, rows.Err()
+}
+
+// loadPassiveSkillEffects fetches and unmarshals effects of all unlocked passive nodes.
+func (s *server) loadPassiveSkillEffects(ctx context.Context, charID string) ([]character.SkillEffect, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT sn.effect
+		FROM character_skill_nodes csn
+		JOIN skill_nodes sn ON sn.id = csn.node_id
+		WHERE csn.character_id = $1 AND sn.type = 'passive'
+	`, charID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var effects []character.SkillEffect
+	for rows.Next() {
+		var e character.SkillEffect
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		effects = append(effects, e)
+	}
+	return effects, rows.Err()
+}
+
+// loadCharEffective loads base char stats and applies equipped item bonuses
+// plus passive skill effects.
+func (s *server) loadCharEffective(ctx context.Context, id string) (*serverChar, error) {
+	sc, err := s.loadChar(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	bonuses, err := s.loadEquipmentBonuses(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	character.ApplyEquipment(sc.c, bonuses)
+
+	effects, err := s.loadPassiveSkillEffects(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	character.ApplyPassiveSkills(sc.c, effects)
+
 	return sc, nil
 }
 
@@ -117,16 +194,16 @@ func (s *server) handleCreateCharacter(w http.ResponseWriter, r *http.Request) {
 	err := s.pool.QueryRow(r.Context(), `
 		INSERT INTO characters
 			(name, class, level, xp, xp_to_next, gold,
-			 hp, max_hp, mana, max_mana, attack, defense, critical, cdr)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			 hp, max_hp, attack, defense, critical, cdr)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING id, name, class, level, xp, xp_to_next, gold,
-			hp, max_hp, mana, max_mana, attack, defense, critical, cdr
+			hp, max_hp, attack, defense, critical, cdr
 	`,
 		req.Name, c.Class, c.Level, c.XP, c.XPToNext, 0,
-		c.HP, c.MaxHP, c.Mana, c.MaxMana, c.Attack, c.Defense, c.Critical, c.CDR,
+		c.HP, c.MaxHP, c.Attack, c.Defense, c.Critical, c.CDR,
 	).Scan(
 		&resp.ID, &resp.Name, &resp.Class, &resp.Level, &resp.XP, &resp.XPToNext, &resp.Gold,
-		&resp.HP, &resp.MaxHP, &resp.Mana, &resp.MaxMana, &resp.Attack, &resp.Defense, &resp.Critical, &resp.CDR,
+		&resp.HP, &resp.MaxHP, &resp.Attack, &resp.Defense, &resp.Critical, &resp.CDR,
 	)
 	if err != nil {
 		log.Printf("create character: %v", err)
@@ -140,7 +217,7 @@ func (s *server) handleCreateCharacter(w http.ResponseWriter, r *http.Request) {
 // ── GET /characters/{id} ─────────────────────────────────────────────────────
 
 func (s *server) handleGetCharacter(w http.ResponseWriter, r *http.Request) {
-	sc, err := s.loadChar(r.Context(), r.PathValue("id"))
+	sc, err := s.loadCharEffective(r.Context(), r.PathValue("id"))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
