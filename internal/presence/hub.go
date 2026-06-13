@@ -34,6 +34,7 @@ func (h *Hub) SendSnapshotTo(newClient *Client) {
 		players = append(players, PlayerSnap{
 			ID: c.CharID, Name: c.Name,
 			X: c.X, Y: c.Y, Anim: c.Anim,
+			Equipped: c.Equipped,
 		})
 	}
 	h.mu.RUnlock()
@@ -79,10 +80,11 @@ func (h *Hub) broadcast(senderID string, msg []byte) {
 // ── Message types ──────────────────────────────────────────────────────────
 
 type PosMsg struct {
-	Type string  `json:"type"` // "presence:pos"
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
-	Anim string  `json:"anim"`
+	Type     string            `json:"type"` // "presence:pos"
+	X        float64           `json:"x"`
+	Y        float64           `json:"y"`
+	Anim     string            `json:"anim"`
+	Equipped map[string]string `json:"equipped,omitempty"`
 }
 
 type UpdateMsg struct {
@@ -91,11 +93,12 @@ type UpdateMsg struct {
 }
 
 type PlayerSnap struct {
-	ID   string  `json:"id"`
-	Name string  `json:"name"`
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
-	Anim string  `json:"anim"`
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	X        float64           `json:"x"`
+	Y        float64           `json:"y"`
+	Anim     string            `json:"anim"`
+	Equipped map[string]string `json:"equipped,omitempty"`
 }
 
 type LeaveMsg struct {

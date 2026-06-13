@@ -6,6 +6,7 @@ export interface PlayerSnap {
   x: number
   y: number
   anim: string
+  equipped?: Record<string, string>
 }
 
 type UpdateCallback = (players: PlayerSnap[]) => void
@@ -38,15 +39,18 @@ export class PresenceSocket {
     this.ws.onclose = () => { this.ws = null }
   }
 
-  sendPosition(x: number, y: number, anim = 'idle'): void {
+  sendPosition(x: number, y: number, anim = 'idle', equipped?: Record<string, string>): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return
-    this.ws.send(JSON.stringify({ type: 'presence:pos', x, y, anim }))
+    this.ws.send(JSON.stringify({ type: 'presence:pos', x, y, anim, equipped }))
   }
 
-  startBroadcast(getPos: () => { x: number; y: number; moving?: boolean }, intervalMs = 80): void {
+  startBroadcast(
+    getPos: () => { x: number; y: number; moving?: boolean; equipped?: Record<string, string> },
+    intervalMs = 80,
+  ): void {
     this.broadcastInterval = setInterval(() => {
-      const { x, y, moving } = getPos()
-      this.sendPosition(x, y, moving ? 'walk' : 'idle')
+      const { x, y, moving, equipped } = getPos()
+      this.sendPosition(x, y, moving ? 'walk' : 'idle', equipped)
     }, intervalMs)
   }
 

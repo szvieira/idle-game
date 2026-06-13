@@ -20,9 +20,10 @@ type Client struct {
 	conn   *websocket.Conn
 	send   chan []byte
 
-	// Last known position (for broadcasting full state to new joiners)
-	X, Y float64
-	Anim string
+	// Last known state (for broadcasting full state to new joiners)
+	X, Y     float64
+	Anim     string
+	Equipped map[string]string
 }
 
 func NewClient(charID, name string, hub *Hub, conn *websocket.Conn) *Client {
@@ -61,6 +62,9 @@ func (c *Client) readPump(ctx context.Context) {
 		c.X = pos.X
 		c.Y = pos.Y
 		c.Anim = pos.Anim
+		if pos.Equipped != nil {
+			c.Equipped = pos.Equipped
+		}
 
 		// Build update message with this player's info
 		out, _ := json.Marshal(UpdateMsg{
@@ -68,6 +72,7 @@ func (c *Client) readPump(ctx context.Context) {
 			Players: []PlayerSnap{{
 				ID: c.CharID, Name: c.Name,
 				X: c.X, Y: c.Y, Anim: c.Anim,
+				Equipped: c.Equipped,
 			}},
 		})
 		c.hub.Broadcast(c.CharID, out)

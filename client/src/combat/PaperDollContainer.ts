@@ -74,6 +74,12 @@ export class PaperDollContainer {
     return this
   }
 
+  setTint(tint: number): this {
+    this.base.setTint(tint)
+    this.layers.forEach(l => l.setTint(tint))
+    return this
+  }
+
   destroy(): void {
     this.container.destroy(true)
   }

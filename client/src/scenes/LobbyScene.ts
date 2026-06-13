@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { GameState } from '../state/GameState'
 import { PaperDollContainer } from '../combat/PaperDollContainer'
+import { VISUAL_SLOTS } from '../combat/sprites'
 import { PresenceSocket } from '../net/PresenceSocket'
 import { W, H, FONT } from './BaseCombat'
 import type { EquipmentSlot } from '../types/api'
@@ -10,7 +11,7 @@ const LOBBY_ARENA = { x1: 60, y1: 335, x2: 900, y2: 520 }
 const BASE = 'http://localhost:8080'
 
 interface OtherPlayer {
-  sprite: Phaser.GameObjects.Image
+  doll: PaperDollContainer
   label: Phaser.GameObjects.Text
   targetX: number
   targetY: number
@@ -178,7 +179,17 @@ export class LobbyScene extends Phaser.Scene {
       x: this.hero.x,
       y: this.hero.y,
       moving: this.moveTo !== null,
+      equipped: this.getOwnEquipped(),
     }))
+  }
+
+  private getOwnEquipped(): Record<string, string> {
+    const result: Record<string, string> = {}
+    for (const slot of VISUAL_SLOTS) {
+      const item = GameState.instance.equipped[slot as EquipmentSlot]
+      if (item) result[slot] = item.template.name
+    }
+    return result
   }
 
   private shutdownScene(): void {
@@ -189,10 +200,19 @@ export class LobbyScene extends Phaser.Scene {
       this.lobbyPollInterval = null
     }
     for (const entry of this.otherPlayers.values()) {
-      entry.sprite.destroy()
+      entry.doll.destroy()
       entry.label.destroy()
     }
     this.otherPlayers.clear()
+  }
+
+  private applyEquippedToDoll(doll: PaperDollContainer, equipped: Record<string, string>): void {
+    for (const slot of VISUAL_SLOTS) {
+      doll.unequip(slot)
+    }
+    for (const [slot, itemName] of Object.entries(equipped)) {
+      doll.equip(slot as EquipmentSlot, itemName)
+    }
   }
 
   private onPresenceUpdate(players: PlayerSnap[]): void {
@@ -201,7 +221,9 @@ export class LobbyScene extends Phaser.Scene {
 
       const entry = this.otherPlayers.get(player.id)
       if (!entry) {
-        const sprite = this.add.image(player.x, player.y, 'spr_hero').setDepth(3).setTint(0x88aaff)
+        const doll = new PaperDollContainer(this, player.x, player.y)
+        doll.setDepth(3).setTint(0x88aaff)
+        if (player.equipped) this.applyEquippedToDoll(doll, player.equipped)
         const label = this.add.text(player.x, player.y - 40, player.name, {
           fontFamily: FONT,
           fontSize: '9px',
@@ -209,10 +231,11 @@ export class LobbyScene extends Phaser.Scene {
           stroke: '#000',
           strokeThickness: 3,
         }).setOrigin(0.5).setDepth(4)
-        this.otherPlayers.set(player.id, { sprite, label, targetX: player.x, targetY: player.y })
+        this.otherPlayers.set(player.id, { doll, label, targetX: player.x, targetY: player.y })
       } else {
         entry.targetX = player.x
         entry.targetY = player.y
+        if (player.equipped) this.applyEquippedToDoll(entry.doll, player.equipped)
       }
     }
   }
@@ -220,7 +243,7 @@ export class LobbyScene extends Phaser.Scene {
   private onPresenceLeave(id: string): void {
     const entry = this.otherPlayers.get(id)
     if (!entry) return
-    entry.sprite.destroy()
+    entry.doll.destroy()
     entry.label.destroy()
     this.otherPlayers.delete(id)
   }
@@ -440,9 +463,10 @@ export class LobbyScene extends Phaser.Scene {
     // Smoothly interpolate other players toward their last-received positions
     const lerpFactor = Math.min(1, delta * 0.012)
     for (const entry of this.otherPlayers.values()) {
-      entry.sprite.x += (entry.targetX - entry.sprite.x) * lerpFactor
-      entry.sprite.y += (entry.targetY - entry.sprite.y) * lerpFactor
-      entry.label.setPosition(entry.sprite.x, entry.sprite.y - 40)
+      const nx = entry.doll.x + (entry.targetX - entry.doll.x) * lerpFactor
+      const ny = entry.doll.y + (entry.targetY - entry.doll.y) * lerpFactor
+      entry.doll.setPosition(nx, ny)
+      entry.label.setPosition(nx, ny - 40)
     }
 
     if (!this.locked) {
