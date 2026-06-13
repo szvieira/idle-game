@@ -5,7 +5,7 @@ export class GameState {
   expeditionRun: ExpeditionRun | null = null
   inventory: InventoryItem[] = []
   equipped: EquippedSlots = {}
-  skills: CharacterSkills = { unlocked: [], equipped_skill: 'whirlwind', available_points: 0 }
+  skills: CharacterSkills = { nodes: [], unlocked: [], equipped_skill: 'whirlwind', available_points: 0 }
 
   static readonly instance = new GameState()
 }

@@ -1029,28 +1029,106 @@ export class LobbyScene extends Phaser.Scene {
     }
   }
 
-  // ── Shop (unchanged) ───────────────────────────────────────────────────────
+  // ── Shop ──────────────────────────────────────────────────────────────────
 
   private openShop(): void {
     const char = GameState.instance.character!
-    const overlay = this.add.container(0,0).setDepth(60).setScrollFactor(0)
-    overlay.add(this.add.rectangle(W/2,H/2,W,H, 0x000000, 0.75))
-    overlay.add(this.add.text(W/2, 160, 'SHOP', this.font(18,'#ffd34d')).setOrigin(0.5))
-    const hp = this.add.rectangle(W/2-80, 280, 200, 50, 0x1a2a1a).setStrokeStyle(1, 0x5ec05e).setInteractive({ useHandCursor:true })
-    overlay.add(hp)
-    overlay.add(this.add.text(W/2-80, 272, 'HP Potion', this.font(11,'#5ec05e')).setOrigin(0.5))
-    overlay.add(this.add.text(W/2-80, 290, '50 Gold — +50% HP', this.font(8,'#888899')).setOrigin(0.5))
-    hp.on('pointerdown', () => {
-      if (char.gold < 50) return
-      char.gold -= 50
-      char.hp = Math.min(char.max_hp, char.hp + Math.round(char.max_hp * 0.5))
-    })
-    const close = this.add.rectangle(W/2, 420, 120, 36, 0x334455).setStrokeStyle(1, 0x6688aa).setInteractive({ useHandCursor:true })
-    overlay.add(close)
-    overlay.add(this.add.text(W/2, 420, 'CLOSE', this.font(10)).setOrigin(0.5))
-    close.on('pointerdown', () => {
-      overlay.destroy()
-      this.resetHeroToCenter()
-    })
+    const overlay = this.add.container(0, 0).setDepth(60).setScrollFactor(0)
+    overlay.add(this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.88).setInteractive())
+
+    overlay.add(this.add.text(W/2, 32, 'MERCHANT', this.font(16, '#ffd34d')).setOrigin(0.5))
+    const goldTxt = this.add.text(W/2, 62, `Gold: ${char.gold}`, this.font(9, '#d4a020')).setOrigin(0.5)
+    overlay.add(goldTxt)
+
+    const loading = this.add.text(W/2, 280, 'Loading wares…', this.font(9, '#888899')).setOrigin(0.5)
+    overlay.add(loading)
+
+    const closeBtn = this.add.rectangle(W/2, H - 36, 160, 34, 0x2a2235).setStrokeStyle(1, 0x555566).setInteractive({ useHandCursor: true })
+    const closeTxt = this.add.text(W/2, H - 36, 'CLOSE', this.font(9, '#888899')).setOrigin(0.5)
+    overlay.add(closeBtn); overlay.add(closeTxt)
+    closeBtn.on('pointerdown', () => { overlay.destroy(); this.resetHeroToCenter() })
+
+    void fetch(`${BASE}/shop?character_id=${char.id}`)
+      .then(r => r.json())
+      .then((items: Array<{
+        id: string; name: string; slot: string; rarity: string; shop_price: number;
+        attack_bonus: number; defense_bonus: number; hp_bonus: number;
+        crit_bonus: number; cdr_bonus: number; class_restriction?: string | null
+      }>) => {
+        if (!overlay.active) return
+        loading.destroy()
+
+        const COLS = 3, CW = 270, CH = 72, SX = 195, SY = 92, GAP = 78
+        items.forEach((item, idx) => {
+          const col = idx % COLS
+          const row = Math.floor(idx / COLS)
+          const x = SX + col * CW
+          const y = SY + row * GAP
+          if (y + CH / 2 > H - 70) return
+
+          const color = (RARITY_COLOR[item.rarity] ?? 0x888888)
+          const colorHex = `#${color.toString(16).padStart(6, '0')}`
+
+          const box = this.add.rectangle(x, y, CW - 8, CH, 0x0d0a1a).setStrokeStyle(1, color).setInteractive({ useHandCursor: true })
+          overlay.add(box)
+          overlay.add(this.add.text(x - CW/2 + 10, y - 22, item.name, this.font(8, colorHex)).setOrigin(0, 0.5))
+
+          const bonuses = [
+            item.attack_bonus  ? `+${item.attack_bonus}ATK`  : '',
+            item.hp_bonus      ? `+${item.hp_bonus}HP`       : '',
+            item.defense_bonus ? `+${item.defense_bonus}DEF` : '',
+            item.crit_bonus    ? `+${item.crit_bonus}%CR`    : '',
+            item.cdr_bonus     ? `+${item.cdr_bonus}%CDR`    : '',
+          ].filter(Boolean).join('  ')
+          overlay.add(this.add.text(x - CW/2 + 10, y - 4, bonuses, this.font(6, '#777788')).setOrigin(0, 0.5))
+
+          const canAfford = char.gold >= item.shop_price
+          const priceColor = canAfford ? '#ffd34d' : '#774400'
+          overlay.add(this.add.text(x - CW/2 + 10, y + 16, `${item.shop_price} gold`, this.font(7, priceColor)).setOrigin(0, 0.5))
+
+          const buyBtn = this.add.rectangle(x + CW/2 - 44, y, 72, 28, canAfford ? 0x1a2a1a : 0x1a1a1a)
+            .setStrokeStyle(1, canAfford ? 0x5ec05e : 0x333333)
+          overlay.add(buyBtn)
+          overlay.add(this.add.text(x + CW/2 - 44, y, 'BUY', this.font(8, canAfford ? '#5ec05e' : '#444444')).setOrigin(0.5))
+
+          if (canAfford) {
+            buyBtn.setInteractive({ useHandCursor: true })
+            buyBtn.on('pointerdown', async () => {
+              buyBtn.disableInteractive()
+              try {
+                const res = await fetch(`${BASE}/shop/buy`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ character_id: char.id, item_template_id: item.id }),
+                })
+                if (!res.ok) {
+                  const err = await res.json() as { error: string }
+                  overlay.add(this.add.text(W/2, H - 65, err.error ?? 'Purchase failed', this.font(7, '#ff4444')).setOrigin(0.5))
+                  buyBtn.setInteractive({ useHandCursor: true })
+                  return
+                }
+                const updatedChar = await res.json() as typeof char
+                GameState.instance.character = updatedChar
+                char.gold = updatedChar.gold
+                goldTxt.setText(`Gold: ${updatedChar.gold}`)
+                box.setFillStyle(0x0a1a0a)
+                box.setStrokeStyle(1, 0x5ec05e)
+                buyBtn.disableInteractive()
+                buyBtn.setFillStyle(0x112211)
+                buyBtn.setStrokeStyle(1, 0x334433)
+              } catch {
+                buyBtn.setInteractive({ useHandCursor: true })
+              }
+            })
+          }
+        })
+
+        if (items.length === 0) {
+          overlay.add(this.add.text(W/2, 280, 'No items available for your class', this.font(9, '#555566')).setOrigin(0.5))
+        }
+      })
+      .catch(() => {
+        if (overlay.active) loading.setText('Could not load shop')
+      })
   }
 }

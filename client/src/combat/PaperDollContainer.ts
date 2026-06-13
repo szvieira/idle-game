@@ -68,6 +68,11 @@ export class PaperDollContainer {
     return this
   }
 
+  setScrollFactor(x: number, _updateChildren?: boolean): this {
+    this.container.setScrollFactor(x)
+    return this
+  }
+
   get scale(): number { return this.container.scale }
   get x(): number { return this.container.x }
   get y(): number { return this.container.y }

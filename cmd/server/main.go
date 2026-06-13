@@ -53,6 +53,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /raid-lobbies/{id}", s.handleGetRaidLobby)
 	mux.HandleFunc("POST /raid-runs", s.handleStartRaid)
 	mux.HandleFunc("GET /ws/raid", s.handleRaidWS)
+	mux.HandleFunc("GET /shop", s.handleGetShopItems)
+	mux.HandleFunc("POST /shop/buy", s.handleShopBuy)
 	return cors(mux)
 }
 

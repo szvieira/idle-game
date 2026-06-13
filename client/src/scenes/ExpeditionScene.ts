@@ -173,19 +173,27 @@ export class ExpeditionScene extends BaseCombat {
   }
 
   private async finishSession(): Promise<void> {
-    await this.reportSession()
+    const leveled = await this.reportSession()
+    if (leveled) {
+      this.banner(`LEVEL UP!  Lv.${GameState.instance.character!.level}`, '#ffd34d')
+      await new Promise<void>(resolve => { this.time.delayedCall(2200, resolve) })
+    }
     this.scene.start('Lobby')
   }
 
-  private async reportSession(): Promise<void> {
+  private async reportSession(): Promise<boolean> {
     const run = GameState.instance.expeditionRun
-    if (!run) return
+    if (!run) return false
+    const char = GameState.instance.character
+    const oldLevel = char?.level ?? 0
     try {
       const result = await completeExpedition(run.id, this.sessionXP, this.sessionGold, this.sessionItems)
       GameState.instance.character = result.character
       GameState.instance.inventory.push(...result.items_added)
       GameState.instance.expeditionRun = null
+      return result.character.level > oldLevel
     } catch { /* best-effort */ }
+    return false
   }
 }
 

@@ -116,6 +116,7 @@ export class DungeonScene extends BaseCombat {
 
   private async finishSession(): Promise<void> {
     const char = GameState.instance.character!
+    const oldLevel = char.level
     try {
       const result = await request<CompleteExpeditionResult>(
         'POST', '/dungeon-complete', {
@@ -126,6 +127,11 @@ export class DungeonScene extends BaseCombat {
         })
       GameState.instance.character = result.character
       GameState.instance.inventory.push(...result.items_added)
+
+      if (result.character.level > oldLevel) {
+        this.banner(`LEVEL UP!  Lv.${result.character.level}`, '#ffd34d')
+        await new Promise<void>(resolve => { this.time.delayedCall(2200, resolve) })
+      }
     } catch { /* best-effort */ }
     this.scene.start('Lobby')
   }
