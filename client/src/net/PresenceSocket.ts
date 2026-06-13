@@ -43,10 +43,10 @@ export class PresenceSocket {
     this.ws.send(JSON.stringify({ type: 'presence:pos', x, y, anim }))
   }
 
-  startBroadcast(getPos: () => { x: number; y: number }, intervalMs = 150): void {
+  startBroadcast(getPos: () => { x: number; y: number; moving?: boolean }, intervalMs = 80): void {
     this.broadcastInterval = setInterval(() => {
-      const { x, y } = getPos()
-      this.sendPosition(x, y)
+      const { x, y, moving } = getPos()
+      this.sendPosition(x, y, moving ? 'walk' : 'idle')
     }, intervalMs)
   }
 

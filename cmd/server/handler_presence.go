@@ -40,5 +40,6 @@ func (s *server) handlePresence(w http.ResponseWriter, r *http.Request) {
 
 	client := presence.NewClient(charID, name, s.hub, conn)
 	s.hub.Register(client)
+	s.hub.SendSnapshotTo(client) // new joiner sees existing players immediately
 	client.Run(r.Context())
 }

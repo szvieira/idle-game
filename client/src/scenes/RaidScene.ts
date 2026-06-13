@@ -5,12 +5,23 @@ import { RaidSocket } from '../net/RaidSocket'
 import { ARENA, FONT, H, W } from './BaseCombat'
 import type { EnemyState, PlayerState, StateTick } from '../net/raid-types'
 
+interface PosData { x: number; y: number }
+interface HpData  { hp: number; maxHp: number }
+
 export class RaidScene extends Phaser.Scene {
   private socket: RaidSocket | null = null
   private playerSprites: Map<string, PaperDollContainer> = new Map()
   private playerHpBars: Map<string, Phaser.GameObjects.Graphics> = new Map()
   private enemySprites: Map<number, Phaser.GameObjects.Image> = new Map()
   private enemyHpBars: Map<number, Phaser.GameObjects.Graphics> = new Map()
+
+  // Target positions from the server — lerped toward every frame
+  private playerTargets: Map<string, PosData> = new Map()
+  private enemyTargets:  Map<number, PosData> = new Map()
+  // Latest HP values from the server — used when redrawing bars each frame
+  private playerHpData:  Map<string, HpData>  = new Map()
+  private enemyHpData:   Map<number, HpData>  = new Map()
+
   private statusText!: Phaser.GameObjects.Text
   private runId = ''
 
@@ -77,30 +88,24 @@ export class RaidScene extends Phaser.Scene {
       this.playerSprites.delete(player.id)
       this.playerHpBars.get(player.id)?.destroy()
       this.playerHpBars.delete(player.id)
+      this.playerTargets.delete(player.id)
+      this.playerHpData.delete(player.id)
       return
     }
 
-    let doll = this.playerSprites.get(player.id)
-    if (!doll) {
-      doll = new PaperDollContainer(this, player.x, player.y).setDepth(3)
+    if (!this.playerSprites.has(player.id)) {
+      const doll = new PaperDollContainer(this, player.x, player.y).setDepth(3)
       if (player.id !== GameState.instance.character?.id) {
         const base = (doll as unknown as { base?: Phaser.GameObjects.Image }).base
         base?.setTint(0x88aaff)
       }
       this.playerSprites.set(player.id, doll)
+      this.playerHpBars.set(player.id, this.add.graphics().setDepth(8))
     }
-    doll.setPosition(player.x, player.y)
 
-    let bar = this.playerHpBars.get(player.id)
-    if (!bar) {
-      bar = this.add.graphics().setDepth(8)
-      this.playerHpBars.set(player.id, bar)
-    }
-    bar.clear()
-    bar.fillStyle(0x1a1a2e)
-    bar.fillRect(player.x - 28, player.y - 52, 56, 6)
-    bar.fillStyle(0x5ec05e)
-    bar.fillRect(player.x - 28, player.y - 52, Math.round(56 * (player.hp / player.max_hp)), 6)
+    // Store target — the update loop lerps toward it
+    this.playerTargets.set(player.id, { x: player.x, y: player.y })
+    this.playerHpData.set(player.id, { hp: player.hp, maxHp: player.max_hp })
   }
 
   private syncEnemy(enemy: EnemyState): void {
@@ -109,26 +114,60 @@ export class RaidScene extends Phaser.Scene {
       this.enemySprites.delete(enemy.id)
       this.enemyHpBars.get(enemy.id)?.destroy()
       this.enemyHpBars.delete(enemy.id)
+      this.enemyTargets.delete(enemy.id)
+      this.enemyHpData.delete(enemy.id)
       return
     }
 
-    let sprite = this.enemySprites.get(enemy.id)
-    if (!sprite) {
-      sprite = this.add.image(enemy.x, enemy.y, 'spr_boss').setDepth(3)
-      this.enemySprites.set(enemy.id, sprite)
+    if (!this.enemySprites.has(enemy.id)) {
+      this.enemySprites.set(enemy.id, this.add.image(enemy.x, enemy.y, 'spr_boss').setDepth(3))
+      this.enemyHpBars.set(enemy.id, this.add.graphics().setDepth(8))
     }
-    sprite.setPosition(enemy.x, enemy.y)
 
-    let bar = this.enemyHpBars.get(enemy.id)
-    if (!bar) {
-      bar = this.add.graphics().setDepth(8)
-      this.enemyHpBars.set(enemy.id, bar)
+    this.enemyTargets.set(enemy.id, { x: enemy.x, y: enemy.y })
+    this.enemyHpData.set(enemy.id, { hp: enemy.hp, maxHp: enemy.max_hp })
+  }
+
+  update(_time: number, delta: number): void {
+    // Lerp sprites toward server-authoritative positions every frame.
+    // Server ticks at 20 Hz (50 ms); this keeps motion fluid between ticks.
+    const alpha = Math.min(1, delta * 0.014)
+
+    for (const [id, doll] of this.playerSprites) {
+      const target = this.playerTargets.get(id)
+      if (!target) continue
+      const nx = doll.x + (target.x - doll.x) * alpha
+      const ny = doll.y + (target.y - doll.y) * alpha
+      doll.setPosition(nx, ny)
+
+      const bar  = this.playerHpBars.get(id)
+      const data = this.playerHpData.get(id)
+      if (bar && data) {
+        bar.clear()
+        bar.fillStyle(0x1a1a2e)
+        bar.fillRect(nx - 28, ny - 52, 56, 6)
+        bar.fillStyle(0x5ec05e)
+        bar.fillRect(nx - 28, ny - 52, Math.round(56 * (data.hp / data.maxHp)), 6)
+      }
     }
-    bar.clear()
-    bar.fillStyle(0x1a1a2e)
-    bar.fillRect(enemy.x - 40, enemy.y - 60, 80, 8)
-    bar.fillStyle(0xc03a3a)
-    bar.fillRect(enemy.x - 40, enemy.y - 60, Math.round(80 * (enemy.hp / enemy.max_hp)), 8)
+
+    for (const [id, sprite] of this.enemySprites) {
+      const target = this.enemyTargets.get(id)
+      if (!target) continue
+      const nx = sprite.x + (target.x - sprite.x) * alpha
+      const ny = sprite.y + (target.y - sprite.y) * alpha
+      sprite.setPosition(nx, ny)
+
+      const bar  = this.enemyHpBars.get(id)
+      const data = this.enemyHpData.get(id)
+      if (bar && data) {
+        bar.clear()
+        bar.fillStyle(0x1a1a2e)
+        bar.fillRect(nx - 40, ny - 60, 80, 8)
+        bar.fillStyle(0xc03a3a)
+        bar.fillRect(nx - 40, ny - 60, Math.round(80 * (data.hp / data.maxHp)), 8)
+      }
+    }
   }
 
   private showDamage(x: number, y: number, damage: number, crit: boolean): void {
@@ -166,5 +205,9 @@ export class RaidScene extends Phaser.Scene {
     this.playerHpBars.clear()
     this.enemySprites.clear()
     this.enemyHpBars.clear()
+    this.playerTargets.clear()
+    this.enemyTargets.clear()
+    this.playerHpData.clear()
+    this.enemyHpData.clear()
   }
 }

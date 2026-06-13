@@ -45,6 +45,37 @@ func (s *server) handleStartRaid(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not create raid lobby")
 			return
 		}
+	} else {
+		// Party raid: validate that character_id is the lobby leader.
+		if req.CharacterID == "" {
+			writeError(w, http.StatusBadRequest, "character_id required to start party raid")
+			return
+		}
+		var leaderID string
+		err := s.pool.QueryRow(r.Context(), `
+			SELECT leader_character_id::text FROM raid_lobbies
+			WHERE id = $1 AND status = 'waiting'
+		`, lobbyID).Scan(&leaderID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "lobby not found or already started")
+			return
+		}
+		if err != nil {
+			log.Printf("start party raid validate leader: %v", err)
+			writeError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if leaderID != req.CharacterID {
+			writeError(w, http.StatusForbidden, "only the leader can start the raid")
+			return
+		}
+		if _, err := s.pool.Exec(r.Context(), `
+			UPDATE raid_lobbies SET status = 'started' WHERE id = $1
+		`, lobbyID); err != nil {
+			log.Printf("update lobby status: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update lobby")
+			return
+		}
 	}
 
 	var runID string
