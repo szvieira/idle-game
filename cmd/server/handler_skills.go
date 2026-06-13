@@ -13,10 +13,20 @@ import (
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
+type skillNodeDef struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Type       string  `json:"type"`
+	RequiresID *string `json:"requires_id"`
+	Col        int     `json:"col"`
+	Row        int     `json:"row"`
+}
+
 type skillStateResponse struct {
-	Unlocked        []string `json:"unlocked"`
-	EquippedSkill   string   `json:"equipped_skill"`
-	AvailablePoints int      `json:"available_points"`
+	Nodes           []skillNodeDef `json:"nodes"`
+	Unlocked        []string       `json:"unlocked"`
+	EquippedSkill   string         `json:"equipped_skill"`
+	AvailablePoints int            `json:"available_points"`
 }
 
 // ── GET /characters/{id}/skills ───────────────────────────────────────────────
@@ -56,11 +66,11 @@ func (s *server) handleGetSkills(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load equipped skill and level
-	var equippedSkill string
+	var equippedSkill, charClass string
 	var level int
 	err = s.pool.QueryRow(r.Context(), `
-		SELECT equipped_skill, level FROM characters WHERE id = $1
-	`, charID).Scan(&equippedSkill, &level)
+		SELECT equipped_skill, level, class FROM characters WHERE id = $1
+	`, charID).Scan(&equippedSkill, &level, &charClass)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
@@ -71,7 +81,40 @@ func (s *server) handleGetSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	nodeRows, err := s.pool.Query(r.Context(), `
+		SELECT id, name, type, requires_id, col, row
+		FROM skill_nodes
+		WHERE class_restriction = $1
+		ORDER BY row, col
+	`, charClass)
+	if err != nil {
+		log.Printf("get skill nodes: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not fetch skill nodes")
+		return
+	}
+	defer nodeRows.Close()
+
+	var nodes []skillNodeDef
+	for nodeRows.Next() {
+		var n skillNodeDef
+		if err := nodeRows.Scan(&n.ID, &n.Name, &n.Type, &n.RequiresID, &n.Col, &n.Row); err != nil {
+			log.Printf("scan skill node: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not fetch skill nodes")
+			return
+		}
+		nodes = append(nodes, n)
+	}
+	if err := nodeRows.Err(); err != nil {
+		log.Printf("skill node rows: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not fetch skill nodes")
+		return
+	}
+	if nodes == nil {
+		nodes = []skillNodeDef{}
+	}
+
 	writeJSON(w, http.StatusOK, skillStateResponse{
+		Nodes:           nodes,
 		Unlocked:        unlocked,
 		EquippedSkill:   equippedSkill,
 		AvailablePoints: character.SkillPointsAvailable(level, len(unlocked)),

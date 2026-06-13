@@ -27,14 +27,6 @@ const EQ_GRID = [
   ['Armor',  'Boots'],
 ] as const
 
-const SKILL_NODES = [
-  { id: 'whirlwind',   name: 'Whirlwind',   type: 'active'  as const, req: null,           col: 0,  row: 0 },
-  { id: 'brute_force', name: 'Brute Force', type: 'passive' as const, req: 'whirlwind',    col: -1, row: 1 },
-  { id: 'fury',        name: 'Fury',        type: 'passive' as const, req: 'brute_force',  col: -1, row: 2 },
-  { id: 'charge',      name: 'Charge',      type: 'active'  as const, req: 'fury',         col: -1, row: 3 },
-  { id: 'iron_skin',   name: 'Iron Skin',   type: 'passive' as const, req: 'whirlwind',    col:  1, row: 1 },
-  { id: 'vigor',       name: 'Vigor',       type: 'passive' as const, req: 'iron_skin',    col:  1, row: 2 },
-]
 
 interface OtherPlayer {
   doll: PaperDollContainer
@@ -573,9 +565,9 @@ export class LobbyScene extends Phaser.Scene {
 
       const lineG = this.add.graphics()
       lineG.lineStyle(2, 0x334455, 1)
-      SKILL_NODES.forEach(node => {
-        if (!node.req) return
-        const parent = SKILL_NODES.find(n => n.id === node.req)!
+      skills.nodes.forEach(node => {
+        if (!node.requires_id) return
+        const parent = skills.nodes.find(n => n.id === node.requires_id)!
         lineG.strokeLineShape(new Phaser.Geom.Line(
           CX + parent.col * CW, BY + parent.row * RH,
           CX + node.col   * CW, BY + node.row   * RH,
@@ -583,12 +575,12 @@ export class LobbyScene extends Phaser.Scene {
       })
       tabObjs.skills.push(lineG); modal.add(lineG)
 
-      SKILL_NODES.forEach(node => {
+      skills.nodes.forEach(node => {
         const nx = CX + node.col * CW
         const ny = BY + node.row * RH
         const isUnlocked = skills.unlocked.includes(node.id)
         const isEquipped = skills.equipped_skill === node.id
-        const prereqMet  = !node.req || skills.unlocked.includes(node.req)
+        const prereqMet  = !node.requires_id || skills.unlocked.includes(node.requires_id)
         const canUnlock  = !isUnlocked && prereqMet && skills.available_points > 0
 
         const border = isEquipped ? 0xffd34d : isUnlocked ? 0x5ec05e : canUnlock ? 0x334466 : 0x222233

@@ -112,6 +112,7 @@ export interface SkillNode {
 }
 
 export interface CharacterSkills {
+  nodes: SkillNode[]
   unlocked: string[]
   equipped_skill: string
   available_points: number
