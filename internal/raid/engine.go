@@ -173,7 +173,7 @@ func (eng *Engine) step() {
 						e.Dead = true
 					}
 					p.NextAtk = now.Add(1200 * time.Millisecond)
-					eng.broadcastDamage("enemy:"+strconv.Itoa(e.ID), p.X, p.Y, dmg, false)
+					eng.broadcastDamage("enemy:"+strconv.Itoa(e.ID), e.X, e.Y, dmg, false)
 					break
 				}
 			}
@@ -191,7 +191,7 @@ func (eng *Engine) step() {
 					e.Dead = true
 				}
 				p.NextSkill = now.Add(6 * time.Second)
-				eng.broadcastDamage("enemy:"+strconv.Itoa(e.ID), p.X, p.Y, dmg, true)
+				eng.broadcastDamage("enemy:"+strconv.Itoa(e.ID), e.X, e.Y, dmg, true)
 				break
 			}
 		}
@@ -215,7 +215,7 @@ func (eng *Engine) step() {
 				nearest.Dead = true
 			}
 			e.NextAtk = now.Add(2 * time.Second)
-			eng.broadcastDamage(nearest.ID, e.X, e.Y, dmg, false)
+			eng.broadcastDamage(nearest.ID, nearest.X, nearest.Y, dmg, false)
 		}
 		e.X = clamp(e.X, ArenaX1, ArenaX2)
 		e.Y = clamp(e.Y, ArenaY1, ArenaY2)

@@ -23,6 +23,9 @@ export class RaidScene extends Phaser.Scene {
   private enemyHpData:   Map<number, HpData>  = new Map()
 
   private statusText!: Phaser.GameObjects.Text
+  private skillBg!: Phaser.GameObjects.Rectangle
+  private skillLabel!: Phaser.GameObjects.Text
+  private skillCooldownUntil = 0
   private runId = ''
 
   constructor() { super({ key: 'Raid' }) }
@@ -55,18 +58,32 @@ export class RaidScene extends Phaser.Scene {
       this.socket?.sendMove(x, y)
     })
 
-    const skillBtn = this.add.rectangle(W - 90, H - 90, 88, 88, 0x241c2e)
+    // Controls hint
+    this.add.text(W / 2, ARENA.y1 - 10, 'CLICK TO MOVE  •  GET CLOSE TO AUTO-ATTACK  •  SKILL fires from anywhere', {
+      fontFamily: FONT,
+      fontSize: '8px',
+      color: '#7a8fa8',
+      stroke: '#000',
+      strokeThickness: 2,
+    }).setOrigin(0.5, 1).setDepth(20)
+
+    this.skillBg = this.add.rectangle(W - 90, H - 90, 88, 88, 0x241c2e)
       .setStrokeStyle(4, 0xffd34d)
       .setInteractive({ useHandCursor: true })
       .setDepth(20)
-    this.add.text(W - 90, H - 90, 'SKILL', {
+    this.skillLabel = this.add.text(W - 90, H - 90, 'SKILL', {
       fontFamily: FONT,
       fontSize: '10px',
       color: '#7fd4ff',
       stroke: '#000',
       strokeThickness: 3,
     }).setOrigin(0.5).setDepth(21)
-    skillBtn.on('pointerdown', () => this.socket?.sendSkill())
+    this.skillBg.on('pointerdown', () => {
+      const now = this.time.now
+      if (now < this.skillCooldownUntil) return
+      this.socket?.sendSkill()
+      this.skillCooldownUntil = now + 6000
+    })
 
     this.socket = new RaidSocket(this.runId, char.id, {
       onState: (tick) => this.applyState(tick),
@@ -128,7 +145,17 @@ export class RaidScene extends Phaser.Scene {
     this.enemyHpData.set(enemy.id, { hp: enemy.hp, maxHp: enemy.max_hp })
   }
 
-  update(_time: number, delta: number): void {
+  update(time: number, delta: number): void {
+    // Skill cooldown visual
+    if (time < this.skillCooldownUntil) {
+      const remaining = Math.ceil((this.skillCooldownUntil - time) / 1000)
+      this.skillLabel.setText(`${remaining}s`)
+      this.skillBg.setFillStyle(0x120e1a).setStrokeStyle(4, 0x555566)
+    } else if (this.skillLabel.text !== 'SKILL') {
+      this.skillLabel.setText('SKILL')
+      this.skillBg.setFillStyle(0x241c2e).setStrokeStyle(4, 0xffd34d)
+    }
+
     // Lerp sprites toward server-authoritative positions every frame.
     // Server ticks at 20 Hz (50 ms); this keeps motion fluid between ticks.
     const alpha = Math.min(1, delta * 0.014)
