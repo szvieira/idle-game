@@ -18,6 +18,7 @@ type StateTick struct {
 type PlayerState struct {
 	ID    string  `json:"id"`
 	Name  string  `json:"name"`
+	Class string  `json:"class"`
 	X     float64 `json:"x"`
 	Y     float64 `json:"y"`
 	HP    int     `json:"hp"`

@@ -25,6 +25,7 @@ const (
 type enginePlayer struct {
 	ID    string
 	Name  string
+	Class string
 	X, Y  float64
 	HP    int
 	MaxHP int
@@ -62,6 +63,7 @@ type Engine struct {
 	done    chan struct{}
 	endOnce sync.Once
 	rng     *rand.Rand
+	outcome string
 }
 
 func NewEngine(raidID string) *Engine {
@@ -73,12 +75,12 @@ func NewEngine(raidID string) *Engine {
 	}
 }
 
-func (eng *Engine) AddPlayer(id, name string, hp, atk, def int, _ *websocket.Conn) {
+func (eng *Engine) AddPlayer(id, name string, hp, atk, def int, class string, _ *websocket.Conn) {
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
 
 	eng.players[id] = &enginePlayer{
-		ID: id, Name: name,
+		ID: id, Name: name, Class: class,
 		X: 130, Y: float64(360 + len(eng.players)*40),
 		HP: hp, MaxHP: hp, ATK: atk, DEF: def, Speed: 175,
 		send: make(chan []byte, 64),
@@ -228,7 +230,7 @@ func (eng *Engine) step() {
 func (eng *Engine) broadcastState() {
 	ps := make([]PlayerState, 0, len(eng.players))
 	for _, p := range eng.players {
-		ps = append(ps, PlayerState{ID: p.ID, Name: p.Name, X: p.X, Y: p.Y, HP: p.HP, MaxHP: p.MaxHP, Dead: p.Dead})
+		ps = append(ps, PlayerState{ID: p.ID, Name: p.Name, Class: p.Class, X: p.X, Y: p.Y, HP: p.HP, MaxHP: p.MaxHP, Dead: p.Dead})
 	}
 	es := make([]EnemyState, 0, len(eng.enemies))
 	for _, e := range eng.enemies {
@@ -277,10 +279,16 @@ func (eng *Engine) checkEnd() {
 
 func (eng *Engine) end(outcome string) {
 	eng.endOnce.Do(func() {
-		msg, _ := json.Marshal(EndMsg{Type: "raid:end", Outcome: outcome})
-		eng.sendAll(msg)
+		eng.outcome = outcome
+		for _, p := range eng.players {
+			close(p.send)
+		}
 		close(eng.done)
 	})
+}
+
+func (eng *Engine) Outcome() string {
+	return eng.outcome
 }
 
 func (eng *Engine) sendAll(msg []byte) {
