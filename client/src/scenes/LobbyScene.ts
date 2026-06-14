@@ -8,7 +8,7 @@ import { getSkills, unlockSkill, equipSkill } from '../api/skills'
 import { getDungeons } from '../api/dungeons'
 import { buildDungeonList } from './ExpeditionScene'
 import { W, H, FONT } from './BaseCombat'
-import type { EquipmentSlot, InventoryItem } from '../types/api'
+import type { EquipmentSlot, InventoryItem, ItemTemplate } from '../types/api'
 import type { PlayerSnap } from '../net/PresenceSocket'
 
 const WORLD_W = 1920
@@ -150,6 +150,7 @@ export class LobbyScene extends Phaser.Scene {
       [960,560, 1600,470],  // expedition
       [960,560, 960,395],   // raid
       [960,560, 1350,555],  // shop
+      [960,560, 600,520],   // blacksmith
     ]
     for (const [x1,y1,x2,y2] of paths) {
       g.lineStyle(28, 0x252238, 0.9)
@@ -263,6 +264,40 @@ export class LobbyScene extends Phaser.Scene {
     g.fillRect(npx-13, npy-53, 26, 6)
     g.fillTriangle(npx-8, npy-53, npx, npy-70, npx+8, npy-53)
 
+    // ── Blacksmith forge at (600, 500) ─────────────────
+    const bx = 600, by = 500
+    // Stone base
+    g.fillStyle(0x3a3a3a, 1)
+    g.fillRect(bx - 40, by - 10, 80, 30)
+    // Anvil body (trapezoid approximated as overlapping rects)
+    g.fillStyle(0x222222, 1)
+    g.fillRect(bx - 28, by - 30, 56, 20)
+    g.fillRect(bx - 20, by - 40, 40, 12)
+    // Anvil horn
+    g.fillStyle(0x1a1a1a, 1)
+    g.fillTriangle(bx + 28, by - 26, bx + 48, by - 20, bx + 28, by - 14)
+    // Glowing embers (drawn as small circles, tweened below)
+    g.fillStyle(0xff6600, 0.9)
+    g.fillCircle(bx - 8, by + 8, 5)
+    g.fillCircle(bx + 4, by + 10, 4)
+    g.fillCircle(bx + 14, by + 7, 3)
+
+    // Animated ember glow
+    const ember = this.add.ellipse(bx, by + 8, 30, 10, 0xff4400, 0.7).setDepth(2)
+    this.tweens.add({ targets: ember, alpha: 0.2, scaleX: 1.3, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.inOut' })
+
+    // Blacksmith NPC (right of forge)
+    const bsnpx = bx + 55, bsnpy = by - 10
+    g.fillStyle(0xd4a070, 1); g.fillCircle(bsnpx, bsnpy - 40, 12)   // head
+    g.fillStyle(0x553311, 1); g.fillRect(bsnpx - 9, bsnpy - 28, 18, 34) // leather apron body
+    g.fillStyle(0x221100, 1); g.fillRect(bsnpx - 10, bsnpy - 8, 10, 16); g.fillRect(bsnpx, bsnpy - 8, 10, 16) // legs
+    g.fillStyle(0xd4a070, 1); g.fillRect(bsnpx - 16, bsnpy - 24, 8, 10); g.fillRect(bsnpx + 8, bsnpy - 24, 8, 10) // arms
+    // Hammer in hand
+    g.fillStyle(0x888888, 1); g.fillRect(bsnpx + 14, bsnpy - 32, 6, 16)
+    g.fillStyle(0x555555, 1); g.fillRect(bsnpx + 10, bsnpy - 36, 14, 8)
+    // Blacksmith label
+    this.add.text(bx, by - 70, 'Blacksmith', this.font(8, '#cc8844')).setOrigin(0.5).setDepth(-5)
+
     // Fixed hint at bottom of screen
     const hint = this.add.text(W/2, H-12, 'CLICK TO WALK  •  APPROACH PORTAL TO ENTER',
       this.font(7,'#9aa8bd')).setOrigin(0.5,1).setDepth(20).setScrollFactor(0)
@@ -340,6 +375,10 @@ export class LobbyScene extends Phaser.Scene {
     // Character modal trigger near inn door
     this.addPOI({ x:960, y:530, r:60, color:0x9aa8bd, label:'CHARACTER',
       onEnter: () => { this.modalFromPoi = true; void this.openCharModal() } })
+
+    // Blacksmith trigger
+    this.addPOI({ x:600, y:520, r:55, color:0xcc8844, label:'BLACKSMITH',
+      onEnter: () => void this.openBlacksmith() })
   }
 
   private buildTopUI(): void {
@@ -1027,6 +1066,188 @@ export class LobbyScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  // ── Blacksmith ───────────────────────────────────────────────────────────
+
+  private maxEnchantForRarity(rarity: string): number {
+    switch (rarity) {
+      case 'Uncommon': return 5
+      case 'Rare':     return 8
+      case 'Epic':     return 12
+      default:         return 3
+    }
+  }
+
+  private enchantCost(currentLevel: number): number {
+    return 50 * Math.pow(3, currentLevel)
+  }
+
+  private primaryStatLabel(t: { attack_bonus: number; defense_bonus: number; hp_bonus: number; crit_bonus: number; cdr_bonus: number }): string {
+    const vals: [number, string][] = [
+      [t.attack_bonus,  'ATK'],
+      [t.defense_bonus, 'DEF'],
+      [t.hp_bonus,      'HP'],
+      [t.crit_bonus,    'CRIT%'],
+      [t.cdr_bonus,     'CDR%'],
+    ]
+    let best: [number, string] = [0, 'ATK']
+    for (const v of vals) {
+      if (v[0] > best[0]) best = v
+    }
+    return best[1]
+  }
+
+  private async openBlacksmith(): Promise<void> {
+    const char = GameState.instance.character!
+
+    // Refresh equipped data
+    try {
+      const equipped = await getEquipped(char.id)
+      GameState.instance.equipped = equipped
+    } catch {
+      this.resetHeroToCenter()
+      return
+    }
+
+    this.buildBlacksmithModal()
+  }
+
+  private buildBlacksmithModal(): void {
+    const char = GameState.instance.character!
+    const eq   = GameState.instance.equipped
+
+    // Destroy any prior modal
+    this.activeModal?.destroy()
+    this.activeModal = null
+
+    const overlay = this.add.container(0, 0).setDepth(70).setScrollFactor(0)
+    this.activeModal = overlay
+
+    // Backdrop
+    overlay.add(this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.88).setInteractive())
+
+    // Panel
+    overlay.add(this.add.rectangle(W/2, H/2, 760, 500, 0x0d0a1a).setStrokeStyle(2, 0xcc8844))
+
+    // Title
+    overlay.add(this.add.text(W/2, 40, 'BLACKSMITH', this.font(15, '#cc8844')).setOrigin(0.5))
+    overlay.add(this.add.text(W/2, 68, 'Enchant your equipped gear', this.font(7, '#9aa8bd')).setOrigin(0.5))
+
+    const goldTxt = this.add.text(W/2, 88, `Gold: ${char.gold}`, this.font(8, '#d4a020')).setOrigin(0.5)
+    overlay.add(goldTxt)
+
+    const equippedEntries = Object.entries(eq).filter(([, item]) => item != null) as [string, NonNullable<(typeof eq)[keyof typeof eq]>][]
+
+    if (equippedEntries.length === 0) {
+      overlay.add(this.add.text(W/2, H/2, 'No equipped items to enchant', this.font(9, '#555566')).setOrigin(0.5))
+    } else {
+      const COLS = 2, CW = 340, CH = 90, SX = W/2 - CW/2 - 5, SY = 118, GAP = 98
+      equippedEntries.forEach(([, item], idx) => {
+        const col = idx % COLS
+        const row = Math.floor(idx / COLS)
+        const x   = SX + col * (CW + 12)
+        const y   = SY + row * GAP
+
+        if (y + CH / 2 > H - 60) return
+
+        const enchantLevel = item.enchant_level ?? 0
+        const maxLevel     = this.maxEnchantForRarity(item.template.rarity)
+        const atMax        = enchantLevel >= maxLevel
+        const cost         = this.enchantCost(enchantLevel)
+        const canAfford    = char.gold >= cost
+        const primaryStat  = this.primaryStatLabel(item.template)
+        const rarityColor  = RARITY_COLOR[item.template.rarity] ?? 0x888888
+        const colorHex     = `#${rarityColor.toString(16).padStart(6, '0')}`
+
+        const box = this.add.rectangle(x + CW/2, y + CH/2, CW, CH, 0x111128)
+          .setStrokeStyle(1, rarityColor)
+        overlay.add(box)
+
+        // Item name + enchant level
+        const nameLabel = enchantLevel > 0 ? `${item.template.name}  +${enchantLevel}` : item.template.name
+        overlay.add(this.add.text(x + 10, y + 8, nameLabel, this.font(8, colorHex)).setOrigin(0, 0.5))
+
+        // Slot + rarity
+        overlay.add(this.add.text(x + 10, y + 26, `${item.template.slot}  •  ${item.template.rarity}`, this.font(6, '#777788')).setOrigin(0, 0.5))
+
+        if (atMax) {
+          overlay.add(this.add.text(x + 10, y + 50, `MAX ENCHANT (+${maxLevel})`, this.font(7, '#cc8844')).setOrigin(0, 0.5))
+        } else {
+          // Next enchant info
+          overlay.add(this.add.text(x + 10, y + 46,
+            `Next: +${enchantLevel + 1} ${primaryStat}  •  Cost: ${cost}g`,
+            this.font(6, canAfford ? '#88cc88' : '#774400')).setOrigin(0, 0.5))
+
+          // Max info
+          overlay.add(this.add.text(x + 10, y + 64,
+            `Max: +${maxLevel}`,
+            this.font(5, '#555566')).setOrigin(0, 0.5))
+
+          // Enchant button
+          const btnColor  = canAfford ? 0x1a2a1a : 0x1a1a1a
+          const btnBorder = canAfford ? 0xcc8844 : 0x333333
+          const btnTxtClr = canAfford ? '#cc8844' : '#444444'
+          const enchBtn   = this.add.rectangle(x + CW - 52, y + CH/2, 88, 32, btnColor)
+            .setStrokeStyle(1, btnBorder)
+          overlay.add(enchBtn)
+          const enchTxt = this.add.text(x + CW - 52, y + CH/2, 'ENCHANT', this.font(7, btnTxtClr)).setOrigin(0.5)
+          overlay.add(enchTxt)
+
+          if (canAfford) {
+            enchBtn.setInteractive({ useHandCursor: true })
+            enchBtn.on('pointerdown', async () => {
+              enchBtn.disableInteractive()
+              enchTxt.setColor('#888888')
+              try {
+                const res = await fetch(`${BASE}/enchant`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ equipment_id: item.id, character_id: char.id }),
+                })
+                if (!res.ok) {
+                  const err = await res.json() as { error: string }
+                  overlay.add(this.add.text(W/2, H - 52, err.error ?? 'Enchant failed', this.font(7, '#ff4444')).setOrigin(0.5))
+                  enchBtn.setInteractive({ useHandCursor: true })
+                  enchTxt.setColor(btnTxtClr)
+                  return
+                }
+                const data = await res.json() as { gold: number; equipment: { id: string; enchant_level: number; template: ItemTemplate } }
+                // Update gold
+                char.gold = data.gold
+                GameState.instance.character = { ...char }
+                goldTxt.setText(`Gold: ${data.gold}`)
+                // Update equipped item enchant level in GameState
+                const slot = item.template.slot as EquipmentSlot
+                const current = GameState.instance.equipped[slot]
+                if (current) {
+                  GameState.instance.equipped[slot] = { ...current, enchant_level: data.equipment.enchant_level }
+                }
+                // Rebuild modal to reflect changes
+                overlay.destroy()
+                this.activeModal = null
+                this.buildBlacksmithModal()
+              } catch {
+                enchBtn.setInteractive({ useHandCursor: true })
+                enchTxt.setColor(btnTxtClr)
+              }
+            })
+          }
+        }
+      })
+    }
+
+    // Close button
+    const closeBtn = this.add.rectangle(W/2 + 356, 40, 38, 28, 0x1a0d0d)
+      .setStrokeStyle(1, 0x664444)
+      .setInteractive({ useHandCursor: true })
+    overlay.add(closeBtn)
+    overlay.add(this.add.text(W/2 + 356, 40, 'X', this.font(9, '#cc6666')).setOrigin(0.5))
+    closeBtn.on('pointerdown', () => {
+      overlay.destroy()
+      this.activeModal = null
+      this.resetHeroToCenter()
+    })
   }
 
   // ── Shop ──────────────────────────────────────────────────────────────────

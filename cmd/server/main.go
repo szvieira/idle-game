@@ -55,6 +55,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /ws/raid", s.handleRaidWS)
 	mux.HandleFunc("GET /shop", s.handleGetShopItems)
 	mux.HandleFunc("POST /shop/buy", s.handleShopBuy)
+	mux.HandleFunc("POST /enchant", s.handleEnchant)
 	return cors(mux)
 }
 

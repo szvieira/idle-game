@@ -90,6 +90,7 @@ export interface InventoryItem {
   id: string
   character_id: string
   item_template_id: string
+  enchant_level?: number
   template: ItemTemplate
 }
 

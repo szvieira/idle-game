@@ -1,0 +1,1 @@
+ALTER TABLE equipment ADD COLUMN enchant_level INTEGER NOT NULL DEFAULT 0;
