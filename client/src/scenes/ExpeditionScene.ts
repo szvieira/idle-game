@@ -40,15 +40,22 @@ export class ExpeditionScene extends BaseCombat {
     const char = GameState.instance.character
     if (!char) { this.scene.start('CharacterSelect'); return }
 
+    const ZONE_ID_TO_NUM: Record<string, number> = {
+      forest: 1, ruins: 2, shadow_cavern: 3,
+    }
+    const data = this.scene.settings.data as { zoneId?: string } | undefined
+    const zoneId = data?.zoneId ?? 'forest'
+
     this.busy = false; this.menuOpen = false; this.portal = null
     this.sessionXP = 0; this.sessionGold = 0; this.sessionItems = []
-    this.zone = 1; this.room = 1
+    this.zone = ZONE_ID_TO_NUM[zoneId] ?? 1
+    this.room = 1
     this.enemies = []
     this.moveTo = null
 
     // Start/resume expedition run
     try {
-      const run = await startExpedition(char.id, 'forest')
+      const run = await startExpedition(char.id, zoneId)
       GameState.instance.expeditionRun = run
     } catch { /* continue even if run tracking fails */ }
 
