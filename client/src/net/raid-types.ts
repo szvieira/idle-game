@@ -1,6 +1,9 @@
+import type { DroppedItem } from '../types/api'
+
 export interface PlayerState {
   id: string
   name: string
+  class: string
   x: number
   y: number
   hp: number
@@ -37,4 +40,5 @@ export interface DamageEvent {
 export interface EndMsg {
   type: 'raid:end'
   outcome: 'victory' | 'defeat'
+  dropped_item?: DroppedItem | null
 }

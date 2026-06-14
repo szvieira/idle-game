@@ -80,6 +80,7 @@ export abstract class BaseCombat extends Phaser.Scene {
   protected autoSkill = true
 
   private breathTween: Phaser.Tweens.Tween | null = null
+  private divineShieldUntil = 0
 
   // HUD refs
   private txtGold!: Phaser.GameObjects.Text
@@ -132,7 +133,7 @@ export abstract class BaseCombat extends Phaser.Scene {
     const skills = GameState.instance.skills
     this.skill = SKILLS[skills.equipped_skill] ?? SKILLS['whirlwind']
 
-    const doll = new PaperDollContainer(this, 130, 360)
+    const doll = new PaperDollContainer(this, 130, 360, char.class)
     doll.setDepth(3)
     // Apply equipped items to doll
     for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
@@ -409,6 +410,14 @@ export abstract class BaseCombat extends Phaser.Scene {
   // ── Combat ──────────────────────────────────────────────────────────────────
   private enemyStrike(e: EnemyState): void {
     const h = this.hero
+    // Block damage if Divine Shield is active
+    if (this.time.now < this.divineShieldUntil) {
+      const block = this.add.text(h.x, h.y - 50, 'BLOCKED', this.font(10, '#ffd34d'))
+        .setOrigin(0.5).setDepth(20)
+      this.tweens.add({ targets: block, y: h.y - 90, alpha: 0, duration: 600,
+        onComplete: () => block.destroy() })
+      return
+    }
     const dmg = Math.max(1, Math.round(e.atk * (0.85 + Math.random()*0.3) - h.def))
     h.hp = Math.max(0, h.hp - dmg)
 
@@ -477,12 +486,15 @@ export abstract class BaseCombat extends Phaser.Scene {
     }
     h.mp -= this.skill.mpCost
     h.skillReady = now + cdMs
-    if (this.skill.type === 'aoe') {
-      h.castLock = now + 650
-      this.castWhirlwind()
-    } else {
-      h.castLock = now + 520
-      this.castCharge()
+    const { enemy: target } = this.nearestEnemy(h)
+    switch (GameState.instance.skills.equipped_skill) {
+      case 'whirlwind':     h.castLock = now + 650; this.castWhirlwind(); break
+      case 'charge':        h.castLock = now + 520; this.castCharge(); break
+      case 'fireball':      h.castLock = now + 500; if (target) this.castFireball(target); break
+      case 'meteor':        h.castLock = now + 600; if (target) this.castMeteor(target); break
+      case 'holy_smite':    h.castLock = now + 500; if (target) this.castHolySmite(target); break
+      case 'divine_shield': h.castLock = now + 400; this.castDivineShield(); break
+      default:              h.castLock = now + 650; this.castWhirlwind(); break
     }
   }
 
@@ -548,6 +560,116 @@ export abstract class BaseCombat extends Phaser.Scene {
         })
       },
     })
+  }
+
+  private castFireball(e: EnemyState): void {
+    const ball = this.add.circle(this.hero.x, this.hero.y, 10, 0xff6a00, 1).setDepth(10)
+    const trail = this.add.circle(this.hero.x, this.hero.y, 14, 0xff3300, 0.4).setDepth(9)
+    this.tweens.add({
+      targets: trail, x: e.x, y: e.y, duration: 280, ease: 'Quad.in',
+      onComplete: () => trail.destroy()
+    })
+    this.tweens.add({
+      targets: ball, x: e.x, y: e.y, duration: 260, ease: 'Quad.in',
+      onComplete: () => {
+        ball.destroy()
+        // Explosion: 6 sparks
+        for (let i = 0; i < 6; i++) {
+          const ang = (i / 6) * Math.PI * 2
+          const sp = this.add.circle(e.x, e.y, 5, 0xff8800, 1).setDepth(10)
+          this.tweens.add({
+            targets: sp,
+            x: e.x + Math.cos(ang) * 30, y: e.y + Math.sin(ang) * 30,
+            alpha: 0, scale: 0.3, duration: 250, ease: 'Quad.out',
+            onComplete: () => sp.destroy()
+          })
+        }
+        // Central burst
+        const burst = this.add.circle(e.x, e.y, 22, 0xff5500, 0.7).setDepth(10)
+        this.tweens.add({ targets: burst, scale: 2.5, alpha: 0, duration: 300, onComplete: () => burst.destroy() })
+      }
+    })
+  }
+
+  private castMeteor(e: EnemyState): void {
+    // Warning ring on ground
+    const warn = this.add.circle(e.x, e.y, 44, 0xff2200, 0).setDepth(8)
+      .setStrokeStyle(3, 0xff4400, 0.6)
+    this.tweens.add({ targets: warn, alpha: 0.3, duration: 400, yoyo: true, repeat: 1,
+      onComplete: () => warn.destroy() })
+    // Meteor falling from above
+    const rock = this.add.circle(e.x, e.y - 220, 26, 0xcc2200, 1).setDepth(11)
+    const glow = this.add.circle(e.x, e.y - 220, 38, 0xff6600, 0.4).setDepth(10)
+    this.tweens.add({ targets: glow, y: e.y, alpha: 0, duration: 480, ease: 'Quad.in',
+      onComplete: () => glow.destroy() })
+    this.tweens.add({
+      targets: rock, y: e.y, duration: 480, ease: 'Quad.in',
+      onComplete: () => {
+        rock.destroy()
+        // Shockwave ring
+        const ring = this.add.circle(e.x, e.y, 10, 0xff4400, 0).setDepth(10)
+          .setStrokeStyle(4, 0xff6600, 0.8)
+        this.tweens.add({ targets: ring, scale: 6, alpha: 0, duration: 380, ease: 'Quad.out',
+          onComplete: () => ring.destroy() })
+        // Screen flash
+        const flash = this.add.rectangle(this.hero.x, this.hero.y, 960, 540, 0xff3300, 0.1)
+          .setDepth(25)
+        this.tweens.add({ targets: flash, alpha: 0, duration: 160, onComplete: () => flash.destroy() })
+        // 8 debris particles
+        for (let i = 0; i < 8; i++) {
+          const ang = (i / 8) * Math.PI * 2
+          const d = this.add.rectangle(e.x, e.y, 6, 6, 0xaa3300).setDepth(10)
+          this.tweens.add({
+            targets: d,
+            x: e.x + Math.cos(ang) * 50, y: e.y + Math.sin(ang) * 50,
+            alpha: 0, angle: 180, duration: 400, ease: 'Quad.out',
+            onComplete: () => d.destroy()
+          })
+        }
+      }
+    })
+  }
+
+  private castHolySmite(e: EnemyState): void {
+    // Golden burst rings
+    for (let r = 0; r < 3; r++) {
+      const ring = this.add.circle(this.hero.x, this.hero.y, 10 + r * 10, 0xffd34d, 0)
+        .setStrokeStyle(3, 0xffd34d, 0.7).setDepth(8)
+      this.tweens.add({
+        targets: ring, scale: 3 + r * 0.5, alpha: 0, duration: 380,
+        delay: r * 60, ease: 'Quad.out', onComplete: () => ring.destroy()
+      })
+    }
+    // Ray toward enemy
+    const ray = this.add.rectangle(
+      (this.hero.x + e.x) / 2, (this.hero.y + e.y) / 2,
+      Phaser.Math.Distance.Between(this.hero.x, this.hero.y, e.x, e.y),
+      6, 0xffd34d, 0.7
+    ).setDepth(9)
+    const ang = Phaser.Math.Angle.Between(this.hero.x, this.hero.y, e.x, e.y)
+    ray.setRotation(ang)
+    this.tweens.add({ targets: ray, alpha: 0, scaleX: 0.3, duration: 300, onComplete: () => ray.destroy() })
+    // Heal text (if Paladin heals on this skill)
+    const healAmt = GameState.instance.character?.class === 'Paladin' ? '+heal' : ''
+    if (healAmt) {
+      const ht = this.add.text(this.hero.x, this.hero.y - 40, '+HP', this.font(10, '#88ff88'))
+        .setOrigin(0.5).setDepth(20)
+      this.tweens.add({ targets: ht, y: this.hero.y - 80, alpha: 0, duration: 800, onComplete: () => ht.destroy() })
+    }
+  }
+
+  private castDivineShield(): void {
+    this.divineShieldUntil = this.time.now + 3000
+    // Outer aura
+    const aura = this.add.circle(this.hero.x, this.hero.y, 44, 0xffd34d, 0.25).setDepth(2)
+    const ring = this.add.circle(this.hero.x, this.hero.y, 44, 0xffd34d, 0)
+      .setStrokeStyle(3, 0xffd34d, 0.9).setDepth(3)
+    this.tweens.add({ targets: aura, alpha: 0.05, scale: 1.1, duration: 600, yoyo: true, repeat: 2,
+      onComplete: () => aura.destroy() })
+    this.tweens.add({ targets: ring, scale: 1.15, alpha: 0, duration: 400, yoyo: false,
+      onComplete: () => ring.destroy() })
+    // "DIVINE SHIELD" banner
+    this.banner('DIVINE SHIELD', '#ffd34d')
   }
 
   // ── VFX ─────────────────────────────────────────────────────────────────────

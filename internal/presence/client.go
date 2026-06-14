@@ -16,6 +16,7 @@ const sendBuf = 32
 type Client struct {
 	CharID string
 	Name   string
+	Class  string // character class
 	hub    *Hub
 	conn   *websocket.Conn
 	send   chan []byte
@@ -26,9 +27,9 @@ type Client struct {
 	Equipped map[string]string
 }
 
-func NewClient(charID, name string, hub *Hub, conn *websocket.Conn) *Client {
+func NewClient(charID, name, class string, hub *Hub, conn *websocket.Conn) *Client {
 	return &Client{
-		CharID: charID, Name: name,
+		CharID: charID, Name: name, Class: class,
 		hub: hub, conn: conn,
 		send: make(chan []byte, sendBuf),
 	}
@@ -65,12 +66,15 @@ func (c *Client) readPump(ctx context.Context) {
 		if pos.Equipped != nil {
 			c.Equipped = pos.Equipped
 		}
+		if pos.Class != "" {
+			c.Class = pos.Class
+		}
 
 		// Build update message with this player's info
 		out, _ := json.Marshal(UpdateMsg{
 			Type: "presence:update",
 			Players: []PlayerSnap{{
-				ID: c.CharID, Name: c.Name,
+				ID: c.CharID, Name: c.Name, Class: c.Class,
 				X: c.X, Y: c.Y, Anim: c.Anim,
 				Equipped: c.Equipped,
 			}},

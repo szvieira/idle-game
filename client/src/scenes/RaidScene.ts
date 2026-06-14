@@ -3,7 +3,7 @@ import { GameState } from '../state/GameState'
 import { PaperDollContainer } from '../combat/PaperDollContainer'
 import { RaidSocket } from '../net/RaidSocket'
 import { ARENA, FONT, H, W } from './BaseCombat'
-import type { EnemyState, PlayerState, StateTick } from '../net/raid-types'
+import type { EnemyState, EndMsg, PlayerState, StateTick } from '../net/raid-types'
 
 interface PosData { x: number; y: number }
 interface HpData  { hp: number; maxHp: number }
@@ -88,7 +88,7 @@ export class RaidScene extends Phaser.Scene {
     this.socket = new RaidSocket(this.runId, char.id, {
       onState: (tick) => this.applyState(tick),
       onDamage: (ev) => this.showDamage(ev.x, ev.y, ev.amount, ev.crit),
-      onEnd: (msg) => this.onRaidEnd(msg.outcome),
+      onEnd: (msg) => this.onRaidEnd(msg),
     })
     this.socket.connect()
     this.events.once('shutdown', () => this.shutdownRaid())
@@ -111,7 +111,9 @@ export class RaidScene extends Phaser.Scene {
     }
 
     if (!this.playerSprites.has(player.id)) {
-      const doll = new PaperDollContainer(this, player.x, player.y).setDepth(3)
+      const doll = new PaperDollContainer(this, player.x, player.y,
+        player.class ?? 'Warrior'
+      ).setDepth(3)
       if (player.id !== GameState.instance.character?.id) {
         const base = (doll as unknown as { base?: Phaser.GameObjects.Image }).base
         base?.setTint(0x88aaff)
@@ -215,9 +217,29 @@ export class RaidScene extends Phaser.Scene {
     })
   }
 
-  private onRaidEnd(outcome: 'victory' | 'defeat'): void {
+  private onRaidEnd(msg: EndMsg): void {
+    const { outcome, dropped_item } = msg
     this.statusText.setText(outcome === 'victory' ? 'VICTORY!' : 'DEFEATED')
       .setColor(outcome === 'victory' ? '#ffd34d' : '#c03a3a')
+    if (dropped_item) {
+      GameState.instance.inventory.push(dropped_item as never)
+      const banner = this.add.text(W / 2, H / 2 - 40, `LOOT: ${dropped_item.name}`, {
+        fontFamily: FONT,
+        fontSize: '20px',
+        color: '#ffd700',
+        stroke: '#000',
+        strokeThickness: 4,
+      }).setOrigin(0.5).setDepth(30)
+      this.tweens.add({
+        targets: banner,
+        y: H / 2 - 100,
+        alpha: 0,
+        duration: 2000,
+        ease: 'Quad.out',
+        delay: 500,
+        onComplete: () => banner.destroy(),
+      })
+    }
     this.time.delayedCall(3000, () => this.scene.start('Lobby'))
   }
 

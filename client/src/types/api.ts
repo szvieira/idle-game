@@ -76,19 +76,32 @@ export interface ItemTemplate {
   id: string
   name: string
   slot: 'Helmet' | 'Armor' | 'Weapon' | 'Boots' | 'Ring' | 'Amulet'
-  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic'
-  source: 'expedition' | 'dungeon'
+  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
+  source: 'expedition' | 'dungeon' | 'raid'
   attack_bonus: number
   defense_bonus: number
   hp_bonus: number
   crit_bonus: number
   cdr_bonus: number
+  class_restriction?: string | null
+}
+
+export interface DungeonDefinition {
+  id: string
+  name: string
+  min_level: number
+  floors: number
+  enemy_hp_mult: number
+  enemy_atk_mult: number
+  gold_mult: number
+  loot_rarities: string[]
 }
 
 export interface InventoryItem {
   id: string
   character_id: string
   item_template_id: string
+  enchant_level?: number
   template: ItemTemplate
 }
 
@@ -96,9 +109,28 @@ export type EquipmentSlot = 'Helmet' | 'Armor' | 'Weapon' | 'Boots' | 'Ring' | '
 
 export type EquippedSlots = Partial<Record<EquipmentSlot, InventoryItem>>
 
+export interface DroppedItem {
+  id: string
+  name: string
+  slot: string
+  rarity: string
+  attack_bonus: number
+  defense_bonus: number
+  hp_bonus: number
+  crit_bonus: number
+  cdr_bonus: number
+}
+
 export interface CompleteExpeditionResult {
   character: Character
   items_added: InventoryItem[]
+  dropped_item?: DroppedItem | null
+}
+
+export interface CompleteDungeonResult {
+  character: Character
+  items_added: InventoryItem[]
+  dropped_item?: DroppedItem | null
 }
 
 export interface SkillNode {
@@ -111,6 +143,7 @@ export interface SkillNode {
 }
 
 export interface CharacterSkills {
+  nodes: SkillNode[]
   unlocked: string[]
   equipped_skill: string
   available_points: number

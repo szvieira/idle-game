@@ -530,8 +530,9 @@ type completeExpeditionRequest struct {
 }
 
 type completeExpeditionResponse struct {
-	Character  characterResponse       `json:"character"`
-	ItemsAdded []inventoryItemResponse `json:"items_added"`
+	Character   characterResponse       `json:"character"`
+	ItemsAdded  []inventoryItemResponse `json:"items_added"`
+	DroppedItem *droppedItemResponse    `json:"dropped_item"`
 }
 
 func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request) {
@@ -657,11 +658,41 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Loot drop: 40% chance on expedition completion
+	var droppedItem *droppedItemResponse
+	if rand.Float64() < 0.40 {
+		var drop droppedItemResponse
+		dropErr := s.pool.QueryRow(r.Context(), `
+			SELECT id, name, slot, rarity, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+			FROM item_templates
+			WHERE source = 'expedition'
+			  AND (class_restriction IS NULL OR class_restriction = $1)
+			ORDER BY RANDOM()
+			LIMIT 1
+		`, sc.c.Class).Scan(
+			&drop.ID, &drop.Name, &drop.Slot, &drop.Rarity,
+			&drop.AttackBonus, &drop.DefenseBonus, &drop.HPBonus, &drop.CritBonus, &drop.CDRBonus,
+		)
+		if dropErr == nil {
+			if _, insertErr := s.pool.Exec(r.Context(),
+				`INSERT INTO inventory_items (character_id, item_template_id) VALUES ($1, $2)`,
+				charID, drop.ID,
+			); insertErr != nil {
+				log.Printf("complete expedition insert drop: %v", insertErr)
+			} else {
+				droppedItem = &drop
+			}
+		} else if !errors.Is(dropErr, pgx.ErrNoRows) {
+			log.Printf("complete expedition loot query: %v", dropErr)
+		}
+	}
+
 	if itemsAdded == nil {
 		itemsAdded = []inventoryItemResponse{}
 	}
 	writeJSON(w, http.StatusOK, completeExpeditionResponse{
-		Character:  scEff.toResponse(),
-		ItemsAdded: itemsAdded,
+		Character:   scEff.toResponse(),
+		ItemsAdded:  itemsAdded,
+		DroppedItem: droppedItem,
 	})
 }

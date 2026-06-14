@@ -170,7 +170,8 @@ func (s *server) handleRaidWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eng.AddPlayer(charID, sc.name, sc.c.MaxHP, sc.c.Attack, sc.c.Defense, conn)
+	charClass := sc.c.Class
+	eng.AddPlayer(charID, sc.name, sc.c.MaxHP, sc.c.Attack, sc.c.Defense, charClass, conn)
 	sendCh := eng.SendChan(charID)
 	if sendCh == nil {
 		conn.Close(websocket.StatusInternalError, "raid player not registered")
@@ -183,6 +184,10 @@ func (s *server) handleRaidWS(w http.ResponseWriter, r *http.Request) {
 			select {
 			case msg, ok := <-sendCh:
 				if !ok {
+					// Raid ended — roll loot and send raid:end per-player
+					outcome := eng.Outcome()
+					endPayload := buildRaidEndPayload(ctx, s, outcome, charID, charClass)
+					conn.Write(ctx, websocket.MessageText, endPayload)
 					conn.Close(websocket.StatusNormalClosure, "")
 					return
 				}
@@ -204,4 +209,42 @@ func (s *server) handleRaidWS(w http.ResponseWriter, r *http.Request) {
 		eng.HandleInput(charID, msg)
 	}
 	conn.Close(websocket.StatusNormalClosure, "")
+}
+
+type raidEndMsg struct {
+	Type        string               `json:"type"`
+	Outcome     string               `json:"outcome"`
+	DroppedItem *droppedItemResponse `json:"dropped_item"`
+}
+
+func buildRaidEndPayload(ctx context.Context, s *server, outcome, charID, charClass string) []byte {
+	msg := raidEndMsg{Type: "raid:end", Outcome: outcome}
+	if outcome == "victory" {
+		var drop droppedItemResponse
+		err := s.pool.QueryRow(ctx, `
+			SELECT id, name, slot, rarity, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+			FROM item_templates
+			WHERE source = 'raid'
+			  AND (class_restriction IS NULL OR class_restriction = $1)
+			ORDER BY RANDOM()
+			LIMIT 1
+		`, charClass).Scan(
+			&drop.ID, &drop.Name, &drop.Slot, &drop.Rarity,
+			&drop.AttackBonus, &drop.DefenseBonus, &drop.HPBonus, &drop.CritBonus, &drop.CDRBonus,
+		)
+		if err == nil {
+			if _, insertErr := s.pool.Exec(ctx,
+				`INSERT INTO inventory_items (character_id, item_template_id) VALUES ($1, $2)`,
+				charID, drop.ID,
+			); insertErr != nil {
+				log.Printf("raid loot insert: %v", insertErr)
+			} else {
+				msg.DroppedItem = &drop
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("raid loot query: %v", err)
+		}
+	}
+	b, _ := json.Marshal(msg)
+	return b
 }

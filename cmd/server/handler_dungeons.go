@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"time"
@@ -18,15 +19,20 @@ import (
 // ── GET /dungeon-definitions ──────────────────────────────────────────────────
 
 type dungeonDefResponse struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	MinLevel int    `json:"min_level"`
-	Floors   int    `json:"floors"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	MinLevel     int      `json:"min_level"`
+	Floors       int      `json:"floors"`
+	EnemyHPMult  float64  `json:"enemy_hp_mult"`
+	EnemyATKMult float64  `json:"enemy_atk_mult"`
+	GoldMult     float64  `json:"gold_mult"`
+	LootRarities []string `json:"loot_rarities"`
 }
 
 func (s *server) handleListDungeons(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(),
-		`SELECT id, name, min_level, floors FROM dungeon_definitions ORDER BY min_level`)
+		`SELECT id, name, min_level, floors, enemy_hp_mult, enemy_atk_mult, gold_mult, loot_rarities
+		 FROM dungeon_definitions ORDER BY min_level`)
 	if err != nil {
 		log.Printf("list dungeons: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not list dungeons")
@@ -37,8 +43,11 @@ func (s *server) handleListDungeons(w http.ResponseWriter, r *http.Request) {
 	var defs []dungeonDefResponse
 	for rows.Next() {
 		var d dungeonDefResponse
-		if err := rows.Scan(&d.ID, &d.Name, &d.MinLevel, &d.Floors); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.MinLevel, &d.Floors, &d.EnemyHPMult, &d.EnemyATKMult, &d.GoldMult, &d.LootRarities); err != nil {
 			continue
+		}
+		if d.LootRarities == nil {
+			d.LootRarities = []string{}
 		}
 		defs = append(defs, d)
 	}
@@ -93,10 +102,13 @@ func (s *server) handleCreateDungeonRun(w http.ResponseWriter, r *http.Request) 
 	// Validate dungeon definition
 	var dungeonName string
 	var minLevel int
+	var enemyHPMult, enemyATKMult, goldMult float64
+	var lootRarities []string
 	err := s.pool.QueryRow(r.Context(),
-		`SELECT name, min_level FROM dungeon_definitions WHERE id = $1`,
+		`SELECT name, min_level, enemy_hp_mult, enemy_atk_mult, gold_mult, loot_rarities
+		 FROM dungeon_definitions WHERE id = $1`,
 		req.DungeonDefinitionID,
-	).Scan(&dungeonName, &minLevel)
+	).Scan(&dungeonName, &minLevel, &enemyHPMult, &enemyATKMult, &goldMult, &lootRarities)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "dungeon not found")
 		return
@@ -105,6 +117,9 @@ func (s *server) handleCreateDungeonRun(w http.ResponseWriter, r *http.Request) 
 		log.Printf("load dungeon definition: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load dungeon")
 		return
+	}
+	if lootRarities == nil {
+		lootRarities = []string{"Rare"}
 	}
 
 	// Load participants (MVP: single character)
@@ -120,7 +135,7 @@ func (s *server) handleCreateDungeonRun(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if sc.c.Level < minLevel {
-		writeError(w, http.StatusBadRequest, "character level too low for this dungeon")
+		writeError(w, http.StatusBadRequest, "character level too low for this dungeon tier")
 		return
 	}
 
@@ -136,10 +151,20 @@ func (s *server) handleCreateDungeonRun(w http.ResponseWriter, r *http.Request) 
 	var rolledItems []*dungeon.Item
 
 	for _, room := range rooms {
+		// Apply tier scaling to enemy stats
+		for _, e := range room.Enemies {
+			scaledHP := int(math.Round(float64(e.MaxHP) * enemyHPMult))
+			scaledATK := int(math.Round(float64(e.Attack) * enemyATKMult))
+			e.HP = scaledHP
+			e.MaxHP = scaledHP
+			e.Attack = scaledATK
+		}
+
+		scaledGold := int(math.Round(float64(room.Gold) * goldMult))
 		rs := dungeon.RoomStats{
 			Name:       room.Name,
 			XPGained:   room.XP,
-			GoldEarned: room.Gold,
+			GoldEarned: scaledGold,
 		}
 		survived := true
 		for _, e := range room.Enemies {
@@ -152,7 +177,7 @@ func (s *server) handleCreateDungeonRun(w http.ResponseWriter, r *http.Request) 
 			break
 		}
 		sc.c.XP += room.XP
-		sc.gold += room.Gold
+		sc.gold += scaledGold
 		character.CheckLevelUp(sc.c, lvlH)
 		if item := dungeon.RollItem(rng, room.IsElite, room.IsBoss); item != nil {
 			rolledItems = append(rolledItems, item)
@@ -456,9 +481,28 @@ func (s *server) handleClaimDungeonRun(w http.ResponseWriter, r *http.Request) {
 
 type completeDungeonRequest struct {
 	CharacterID string   `json:"character_id"`
+	DungeonID   string   `json:"dungeon_id"`
 	XP          int      `json:"xp"`
 	Gold        int      `json:"gold"`
 	Items       []string `json:"items"` // item template names
+}
+
+type droppedItemResponse struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Slot         string `json:"slot"`
+	Rarity       string `json:"rarity"`
+	AttackBonus  int    `json:"attack_bonus"`
+	DefenseBonus int    `json:"defense_bonus"`
+	HPBonus      int    `json:"hp_bonus"`
+	CritBonus    int    `json:"crit_bonus"`
+	CDRBonus     int    `json:"cdr_bonus"`
+}
+
+type completeDungeonResponse struct {
+	Character   characterResponse       `json:"character"`
+	ItemsAdded  []inventoryItemResponse `json:"items_added"`
+	DroppedItem *droppedItemResponse    `json:"dropped_item"`
 }
 
 func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
@@ -550,6 +594,47 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve loot rarities from dungeon definition (default to Rare if not specified)
+	dungeonIDForLoot := req.DungeonID
+	if dungeonIDForLoot == "" {
+		dungeonIDForLoot = "normal"
+	}
+	var dropLootRarities []string
+	if lootErr := s.pool.QueryRow(r.Context(),
+		`SELECT loot_rarities FROM dungeon_definitions WHERE id = $1`,
+		dungeonIDForLoot,
+	).Scan(&dropLootRarities); lootErr != nil || len(dropLootRarities) == 0 {
+		dropLootRarities = []string{"Rare"}
+	}
+
+	// Loot drop: 100% drop rate for dungeon (hard content)
+	var droppedItem *droppedItemResponse
+	var drop droppedItemResponse
+	err = s.pool.QueryRow(r.Context(), `
+		SELECT id, name, slot, rarity, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+		FROM item_templates
+		WHERE source = 'dungeon'
+		  AND rarity = ANY($2)
+		  AND (class_restriction IS NULL OR class_restriction = $1)
+		ORDER BY RANDOM()
+		LIMIT 1
+	`, sc.c.Class, dropLootRarities).Scan(
+		&drop.ID, &drop.Name, &drop.Slot, &drop.Rarity,
+		&drop.AttackBonus, &drop.DefenseBonus, &drop.HPBonus, &drop.CritBonus, &drop.CDRBonus,
+	)
+	if err == nil {
+		if _, insertErr := s.pool.Exec(r.Context(),
+			`INSERT INTO inventory_items (character_id, item_template_id) VALUES ($1, $2)`,
+			req.CharacterID, drop.ID,
+		); insertErr != nil {
+			log.Printf("complete dungeon insert drop: %v", insertErr)
+		} else {
+			droppedItem = &drop
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		log.Printf("complete dungeon loot query: %v", err)
+	}
+
 	scEff, err := s.loadCharEffective(r.Context(), req.CharacterID)
 	if err != nil {
 		log.Printf("complete dungeon reload char: %v", err)
@@ -559,8 +644,9 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 	if itemsAdded == nil {
 		itemsAdded = []inventoryItemResponse{}
 	}
-	writeJSON(w, http.StatusOK, completeExpeditionResponse{
-		Character:  scEff.toResponse(),
-		ItemsAdded: itemsAdded,
+	writeJSON(w, http.StatusOK, completeDungeonResponse{
+		Character:   scEff.toResponse(),
+		ItemsAdded:  itemsAdded,
+		DroppedItem: droppedItem,
 	})
 }

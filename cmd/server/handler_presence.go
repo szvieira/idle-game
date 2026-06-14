@@ -18,8 +18,8 @@ func (s *server) handlePresence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var name string
-	err := s.pool.QueryRow(r.Context(), `SELECT name FROM characters WHERE id = $1`, charID).Scan(&name)
+	var name, class string
+	err := s.pool.QueryRow(r.Context(), `SELECT name, class FROM characters WHERE id = $1`, charID).Scan(&name, &class)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
@@ -38,7 +38,7 @@ func (s *server) handlePresence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := presence.NewClient(charID, name, s.hub, conn)
+	client := presence.NewClient(charID, name, class, s.hub, conn)
 	s.hub.Register(client)
 	s.hub.SendSnapshotTo(client) // new joiner sees existing players immediately
 	client.Run(r.Context())

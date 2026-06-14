@@ -3,7 +3,7 @@ import { BaseCombat, ENEMY_TYPES } from './BaseCombat'
 import type { EnemyState } from './BaseCombat'
 import { GameState } from '../state/GameState'
 import { request } from '../api/client'
-import type { CompleteExpeditionResult } from '../types/api'
+import type { CompleteDungeonResult, InventoryItem } from '../types/api'
 
 const DUNGEON_ITEM_POOL = ['Crypt Blade',"Watcher's Helm",'Sepulchral Ring','Silent Boots']
 const EPIC_POOL         = ["Crypt Lord's Mantle",'Profane Axe','Crown of Bones']
@@ -11,15 +11,15 @@ const TOTAL_ROOMS       = 6
 
 export class DungeonScene extends BaseCombat {
   private roomIndex = 0
-  private dungeonId   = 'forsaken_crypt'
-  private dungeonLabel = 'The Forsaken Crypt'
+  private dungeonId   = 'normal'
+  private dungeonLabel = 'The Crypt'
   private txtRoom!: Phaser.GameObjects.Text
 
   constructor() { super({ key: 'Dungeon' }) }
 
   init(data?: { dungeonId?: string; dungeonName?: string }): void {
-    this.dungeonId    = data?.dungeonId   ?? 'forsaken_crypt'
-    this.dungeonLabel = data?.dungeonName ?? 'The Forsaken Crypt'
+    this.dungeonId    = data?.dungeonId   ?? 'normal'
+    this.dungeonLabel = data?.dungeonName ?? 'The Crypt'
   }
 
   create(): void {
@@ -116,16 +116,47 @@ export class DungeonScene extends BaseCombat {
 
   private async finishSession(): Promise<void> {
     const char = GameState.instance.character!
+    const oldLevel = char.level
     try {
-      const result = await request<CompleteExpeditionResult>(
+      const result = await request<CompleteDungeonResult>(
         'POST', '/dungeon-complete', {
           character_id: char.id,
+          dungeon_id:   this.dungeonId,
           xp:    this.sessionXP,
           gold:  this.sessionGold,
           items: this.sessionItems,
         })
       GameState.instance.character = result.character
       GameState.instance.inventory.push(...result.items_added)
+
+      if (result.character.level > oldLevel) {
+        this.banner(`LEVEL UP!  Lv.${result.character.level}`, '#ffd34d')
+        await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
+      }
+
+      if (result.dropped_item) {
+        const item = result.dropped_item
+        const invItem: InventoryItem = {
+          id: '',
+          character_id: char.id,
+          item_template_id: item.id,
+          template: {
+            id: item.id,
+            name: item.name,
+            slot: item.slot as InventoryItem['template']['slot'],
+            rarity: item.rarity as InventoryItem['template']['rarity'],
+            source: 'dungeon',
+            attack_bonus: item.attack_bonus,
+            defense_bonus: item.defense_bonus,
+            hp_bonus: item.hp_bonus,
+            crit_bonus: item.crit_bonus,
+            cdr_bonus: item.cdr_bonus,
+          },
+        }
+        GameState.instance.inventory.push(invItem)
+        this.banner(`DROP: ${item.name} (${item.rarity})`, '#ffd34d')
+        await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
+      }
     } catch { /* best-effort */ }
     this.scene.start('Lobby')
   }

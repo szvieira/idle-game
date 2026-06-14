@@ -6,6 +6,7 @@ import { completeExpedition } from '../api/items'
 import { startExpedition } from '../api/expedition'
 import { getDungeons } from '../api/dungeons'
 import type { DungeonDef } from '../api/dungeons'
+import type { InventoryItem } from '../types/api'
 
 const DROP_CHANCE   = 0.10
 const UNCOMMON_ODDS = 0.25 // at zone >= 2
@@ -173,19 +174,55 @@ export class ExpeditionScene extends BaseCombat {
   }
 
   private async finishSession(): Promise<void> {
-    await this.reportSession()
+    const { leveled, droppedItem } = await this.reportSession()
+    if (leveled) {
+      this.banner(`LEVEL UP!  Lv.${GameState.instance.character!.level}`, '#ffd34d')
+      await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
+    }
+    if (droppedItem) {
+      this.banner(`DROP: ${droppedItem.name} (${droppedItem.rarity})`, '#ffd34d')
+      await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
+    }
     this.scene.start('Lobby')
   }
 
-  private async reportSession(): Promise<void> {
+  private async reportSession(): Promise<{ leveled: boolean; droppedItem: InventoryItem | null }> {
     const run = GameState.instance.expeditionRun
-    if (!run) return
+    if (!run) return { leveled: false, droppedItem: null }
+    const char = GameState.instance.character
+    const oldLevel = char?.level ?? 0
     try {
       const result = await completeExpedition(run.id, this.sessionXP, this.sessionGold, this.sessionItems)
       GameState.instance.character = result.character
       GameState.instance.inventory.push(...result.items_added)
       GameState.instance.expeditionRun = null
+
+      let droppedItem: InventoryItem | null = null
+      if (result.dropped_item) {
+        const item = result.dropped_item
+        droppedItem = {
+          id: '',
+          character_id: char?.id ?? '',
+          item_template_id: item.id,
+          template: {
+            id: item.id,
+            name: item.name,
+            slot: item.slot as InventoryItem['template']['slot'],
+            rarity: item.rarity as InventoryItem['template']['rarity'],
+            source: 'expedition',
+            attack_bonus: item.attack_bonus,
+            defense_bonus: item.defense_bonus,
+            hp_bonus: item.hp_bonus,
+            crit_bonus: item.crit_bonus,
+            cdr_bonus: item.cdr_bonus,
+          },
+        }
+        GameState.instance.inventory.push(droppedItem)
+      }
+
+      return { leveled: result.character.level > oldLevel, droppedItem }
     } catch { /* best-effort */ }
+    return { leveled: false, droppedItem: null }
   }
 }
 
@@ -220,7 +257,10 @@ export function buildDungeonList(
     overlay.add(scene.add.text(W/2 - 220, y + rowH/2 - 20, d.name.toUpperCase(), {
       fontFamily: FONT, fontSize: '10px', color: textCol, stroke: '#000', strokeThickness: 3,
     }))
-    overlay.add(scene.add.text(W/2 - 220, y + rowH/2 + 2, `Lv.${d.min_level}+ REQUIRED  •  ${d.floors} FLOORS`, {
+    const raritiesLabel = d.loot_rarities && d.loot_rarities.length > 0
+      ? `Drops: ${d.loot_rarities.join(', ')}`
+      : `${d.floors} FLOORS`
+    overlay.add(scene.add.text(W/2 - 220, y + rowH/2 + 2, `Lv.${d.min_level}+  •  ${raritiesLabel}`, {
       fontFamily: FONT, fontSize: '7px', color: subCol, stroke: '#000', strokeThickness: 2,
     }))
 

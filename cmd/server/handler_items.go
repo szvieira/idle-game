@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -94,13 +95,14 @@ func (s *server) handleEquip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify item belongs to character and matches slot
-	var itemSlot string
+	var itemSlot, restriction, charClass string
 	err := s.pool.QueryRow(r.Context(), `
-		SELECT it.slot
+		SELECT it.slot, COALESCE(it.class_restriction, ''), c.class
 		FROM inventory_items ii
 		JOIN item_templates it ON it.id = ii.item_template_id
+		JOIN characters c ON c.id = ii.character_id
 		WHERE ii.id = $1 AND ii.character_id = $2
-	`, req.InventoryItemID, charID).Scan(&itemSlot)
+	`, req.InventoryItemID, charID).Scan(&itemSlot, &restriction, &charClass)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "item not found in inventory")
 		return
@@ -113,6 +115,19 @@ func (s *server) handleEquip(w http.ResponseWriter, r *http.Request) {
 	if itemSlot != slot {
 		writeError(w, http.StatusBadRequest, "item slot does not match")
 		return
+	}
+	if restriction != "" {
+		allowed := false
+		for _, cls := range strings.Split(restriction, ",") {
+			if strings.TrimSpace(cls) == charClass {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "this item cannot be equipped by your class")
+			return
+		}
 	}
 
 	// Upsert equipment row

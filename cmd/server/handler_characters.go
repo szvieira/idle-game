@@ -211,6 +211,24 @@ func (s *server) handleCreateCharacter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Seed starting skill node for new character
+	rootSkill := "whirlwind"
+	switch req.Class {
+	case "Mage":    rootSkill = "fireball"
+	case "Paladin": rootSkill = "holy_smite"
+	}
+	if _, err := s.pool.Exec(r.Context(), `
+		INSERT INTO character_skill_nodes (character_id, node_id) VALUES ($1, $2)
+		ON CONFLICT DO NOTHING
+	`, resp.ID, rootSkill); err != nil {
+		log.Printf("seed starting skill: %v", err)
+	}
+	if _, err := s.pool.Exec(r.Context(), `
+		UPDATE characters SET equipped_skill = $1 WHERE id = $2
+	`, rootSkill, resp.ID); err != nil {
+		log.Printf("set equipped skill: %v", err)
+	}
+
 	writeJSON(w, http.StatusCreated, resp)
 }
 

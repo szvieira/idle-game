@@ -7,14 +7,17 @@ export class PaperDollContainer {
   private base: Phaser.GameObjects.Image
   readonly layers: Map<string, Phaser.GameObjects.Image> = new Map()
 
-  constructor(scene: Phaser.Scene, x: number, y: number) {
-    this.base = scene.add.image(0, 0, 'spr_hero')
+  constructor(scene: Phaser.Scene, x: number, y: number, charClass = 'Warrior') {
+    const heroKey = charClass === 'Mage' ? 'spr_hero_mage'
+                  : charClass === 'Paladin' ? 'spr_hero_paladin'
+                  : 'spr_hero_warrior'
+    this.base = scene.add.image(0, 0, heroKey)
 
     // Build one layer per visual slot, all hidden initially
     const layerImages: Phaser.GameObjects.Image[] = []
     let depth = 1
     for (const slot of VISUAL_SLOTS) {
-      const layer = scene.add.image(0, 0, 'spr_hero')
+      const layer = scene.add.image(0, 0, heroKey)
         .setVisible(false)
         .setDepth(depth++)
       this.layers.set(slot, layer)
@@ -62,6 +65,11 @@ export class PaperDollContainer {
 
   setScale(s: number): this {
     this.container.setScale(s)
+    return this
+  }
+
+  setScrollFactor(x: number, _updateChildren?: boolean): this {
+    this.container.setScrollFactor(x)
     return this
   }
 
