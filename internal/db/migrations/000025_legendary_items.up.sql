@@ -1,3 +1,17 @@
+-- Expand rarity constraint to include Legendary
+ALTER TABLE item_templates
+  DROP CONSTRAINT IF EXISTS item_templates_rarity_check;
+ALTER TABLE item_templates
+  ADD CONSTRAINT item_templates_rarity_check
+  CHECK (rarity IN ('Common','Uncommon','Rare','Epic','Legendary'));
+
+-- Expand source constraint to include raid
+ALTER TABLE item_templates
+  DROP CONSTRAINT IF EXISTS item_templates_source_check;
+ALTER TABLE item_templates
+  ADD CONSTRAINT item_templates_source_check
+  CHECK (source IN ('expedition','dungeon','raid'));
+
 -- Legendary raid items
 INSERT INTO item_templates (name, slot, rarity, source, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus, class_restriction) VALUES
   -- Generic (any class)

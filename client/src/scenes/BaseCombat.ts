@@ -196,7 +196,11 @@ export abstract class BaseCombat extends Phaser.Scene {
     const icon = this.add.text(bx, by-6, this.skill.type === 'aoe' ? '*' : '>', this.font(26,'#7fd4ff')).setOrigin(0.5)
     const lbl  = this.add.text(bx, by+28, this.skill.name, this.font(7)).setOrigin(0.5)
     this.skillBtn = this.add.container(0, 0, [ring, icon, lbl, this.skillMpLbl, this.skillCdArc])
-    this.skillBtn.setDepth(20).setSize(96, 96).setInteractive({ useHandCursor: true })
+    this.skillBtn.setDepth(20).setSize(96, 96).setInteractive({
+      hitArea: new Phaser.Geom.Rectangle(bx - 48, by - 48, 96, 96),
+      hitAreaCallback: Phaser.Geom.Rectangle.Contains,
+      useHandCursor: true,
+    })
     this.skillBtn.on('pointerdown', () => this.tryCastSkill(true))
 
     this.autoTxt = this.add.text(bx, by+58, 'AUTO: ON', this.font(8,'#5ec05e'))

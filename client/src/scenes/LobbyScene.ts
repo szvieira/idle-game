@@ -17,7 +17,21 @@ const LOBBY_ARENA = { x1: 80, y1: 380, x2: 1840, y2: 760 }
 const BASE = 'http://localhost:8080'
 
 const RARITY_COLOR: Record<string, number> = {
-  Common: 0xb8c0cc, Uncommon: 0x5ec05e, Rare: 0x4da3ff, Epic: 0xc45aff,
+  Common: 0xb8c0cc, Uncommon: 0x5ec05e, Rare: 0x4da3ff, Epic: 0xc45aff, Legendary: 0xffa500,
+}
+
+// Pin a container and ALL its descendants to the camera (scrollFactor 0).
+// Container.setScrollFactor(x, y, true) is unreliable: it uses Array SetAll,
+// which only updates `scrollFactorX/Y` when they are own properties. They live
+// on the prototype by default, so children keep scrollFactor 1 — breaking input
+// hit-testing in a scrolling camera. Calling the method per object fixes it.
+function pinToCamera(obj: Phaser.GameObjects.GameObject): void {
+  const o = obj as Phaser.GameObjects.GameObject & {
+    setScrollFactor?: (x: number, y?: number) => unknown
+    list?: Phaser.GameObjects.GameObject[]
+  }
+  o.setScrollFactor?.(0, 0)
+  o.list?.forEach(pinToCamera)
 }
 
 // Equipment slot grid: 2 columns × 3 rows in the modal left panel
@@ -63,6 +77,7 @@ export class LobbyScene extends Phaser.Scene {
   private moveTo: { x: number; y: number } | null = null
   private pois: POI[] = []
   private locked = false
+  private poiCooldownUntil = 0
   private presence: PresenceSocket | null = null
   private otherPlayers: Map<string, OtherPlayer> = new Map()
   private lobbyPollInterval: ReturnType<typeof setInterval> | null = null
@@ -72,6 +87,7 @@ export class LobbyScene extends Phaser.Scene {
   private modalDolls: PaperDollContainer[] = []
   private activeModal: Phaser.GameObjects.Container | null = null
   private modalFromPoi = false
+  private charModalTab: 'inventory' | 'skills' = 'inventory'
 
   constructor() { super({ key: 'Lobby' }) }
 
@@ -373,7 +389,7 @@ export class LobbyScene extends Phaser.Scene {
       onEnter: () => this.openShop() })
 
     // Character modal trigger near inn door
-    this.addPOI({ x:960, y:530, r:60, color:0x9aa8bd, label:'CHARACTER',
+    this.addPOI({ x:960, y:450, r:50, color:0x9aa8bd, label:'CHARACTER',
       onEnter: () => { this.modalFromPoi = true; void this.openCharModal() } })
 
     // Blacksmith trigger
@@ -495,12 +511,26 @@ export class LobbyScene extends Phaser.Scene {
         const x = 90 + ci * 145
         const y = 300 + ri * 64
         const item  = eq[slot as EquipmentSlot]
-        const color = item ? RARITY_COLOR[item.template.rarity] : 0x333344
-        modal.add(this.add.rectangle(x, y, 132, 50, 0x111128).setStrokeStyle(1, color))
+        const color = item ? RARITY_COLOR[item.template.rarity] ?? 0x888888 : 0x333344
+        const box = this.add.rectangle(x, y, 132, 50, 0x111128).setStrokeStyle(1, color)
+        modal.add(box)
         modal.add(this.add.text(x, y - 11, slot.toUpperCase(), this.font(5, '#555566')).setOrigin(0.5))
         modal.add(this.add.text(x, y + 7,
           item ? item.template.name : '—',
           this.font(7, item ? `#${color.toString(16).padStart(6,'0')}` : '#333344')).setOrigin(0.5))
+        if (item) {
+          box.setInteractive({ useHandCursor: true })
+          box.on('pointerdown', async () => {
+            box.disableInteractive()
+            try {
+              GameState.instance.character = await unequipItem(char.id, slot as EquipmentSlot)
+              delete GameState.instance.equipped[slot as EquipmentSlot]
+              await this.refreshCharModal()
+            } catch {
+              box.setInteractive({ useHandCursor: true })
+            }
+          })
+        }
       })
     })
 
@@ -513,6 +543,7 @@ export class LobbyScene extends Phaser.Scene {
 
     const showTab = (tab: Tab) => {
       activeTab = tab
+      this.charModalTab = tab
       for (const [t, objs] of Object.entries(tabObjs)) {
         const vis = t === tab
         objs.forEach(o => (o as unknown as { setVisible?(b: boolean): void }).setVisible?.(vis))
@@ -554,7 +585,7 @@ export class LobbyScene extends Phaser.Scene {
         if (y + CH / 2 > 524) return
 
         const isEquipped = Object.values(eq).some(e => e?.id === item.id)
-        const color = RARITY_COLOR[item.template.rarity]
+        const color = RARITY_COLOR[item.template.rarity] ?? 0x888888
 
         const box = this.add.rectangle(x, y, CW - 6, CH, isEquipped ? 0x0d1a0d : 0x111128)
           .setStrokeStyle(1, isEquipped ? 0x5ec05e : color)
@@ -654,8 +685,8 @@ export class LobbyScene extends Phaser.Scene {
     }
     buildSkills()
 
-    // Default to inventory tab
-    showTab('inventory')
+    // Restore last-active tab (persists across refresh after equip/unlock)
+    showTab(this.charModalTab)
 
     // ── Close button ─────────────────────────────────────────────────────────
     const closeBtn = this.add.rectangle(938, 26, 38, 26, 0x1a0d0d)
@@ -664,6 +695,7 @@ export class LobbyScene extends Phaser.Scene {
     modal.add(closeBtn)
     modal.add(this.add.text(938, 26, 'X', this.font(9, '#cc6666')).setOrigin(0.5))
     closeBtn.on('pointerdown', () => this.closeCharModal())
+    pinToCamera(modal)
   }
 
   private closeCharModal(): void {
@@ -671,20 +703,10 @@ export class LobbyScene extends Phaser.Scene {
     this.modalDolls = []
     this.activeModal?.destroy()
     this.activeModal = null
-    if (this.modalFromPoi) {
-      this.resetHeroToCenter()
-    } else {
-      this.locked = false
-    }
+    this.dismissModal()
   }
 
   private async refreshCharModal(): Promise<void> {
-    // Tear down without resetting movement lock
-    for (const d of this.modalDolls) d.destroy()
-    this.modalDolls = []
-    this.activeModal?.destroy()
-    this.activeModal = null
-
     const char = GameState.instance.character!
     const [inventory, equipped, skills] = await Promise.all([
       getInventory(char.id),
@@ -695,6 +717,12 @@ export class LobbyScene extends Phaser.Scene {
     GameState.instance.inventory = inventory
     GameState.instance.equipped  = equipped
     GameState.instance.skills    = skills
+
+    // Tear down old modal only after new data is ready — prevents flicker
+    for (const d of this.modalDolls) d.destroy()
+    this.modalDolls = []
+    this.activeModal?.destroy()
+    this.activeModal = null
 
     this.rebuildWidgetDoll()
     this.buildCharModalContent()
@@ -824,7 +852,8 @@ export class LobbyScene extends Phaser.Scene {
       .setStrokeStyle(1, 0x555566).setInteractive({ useHandCursor: true })
     overlay.add(closeBtn)
     overlay.add(this.add.text(W/2, H - 55, 'CANCEL', this.font(9, '#888899')).setOrigin(0.5))
-    closeBtn.on('pointerdown', () => { overlay.destroy(); this.resetHeroToCenter() })
+    closeBtn.on('pointerdown', () => { overlay.destroy(); this.dismissModal() })
+    pinToCamera(overlay)
 
     try {
       const defs = await getDungeons()
@@ -833,6 +862,7 @@ export class LobbyScene extends Phaser.Scene {
         overlay.destroy()
         this.scene.start('Dungeon', { dungeonId: d.id, dungeonName: d.name, minLevel: d.min_level })
       })
+      pinToCamera(overlay)
     } catch {
       loading.setText('Could not load dungeons')
     }
@@ -871,8 +901,9 @@ export class LobbyScene extends Phaser.Scene {
     overlay.add(close); overlay.add(closeTxt)
     close.on('pointerdown', () => {
       overlay.destroy()
-      this.resetHeroToCenter()
+      this.dismissModal()
     })
+    pinToCamera(overlay)
   }
 
   private async startSoloRaid(): Promise<void> {
@@ -990,8 +1021,9 @@ export class LobbyScene extends Phaser.Scene {
     leaveBtn.on('pointerdown', () => {
       this.clearLobbyPoll()
       overlay.destroy()
-      this.resetHeroToCenter()
+      this.dismissModal()
     })
+    pinToCamera(overlay)
 
     const poll = async () => {
       try {
@@ -1016,6 +1048,12 @@ export class LobbyScene extends Phaser.Scene {
       clearInterval(this.lobbyPollInterval)
       this.lobbyPollInterval = null
     }
+  }
+
+  private dismissModal(): void {
+    this.moveTo = null
+    this.locked = false
+    this.poiCooldownUntil = this.time.now + 1200
   }
 
   private resetHeroToCenter(): void {
@@ -1057,7 +1095,7 @@ export class LobbyScene extends Phaser.Scene {
       entry.label.setPosition(nx, ny - 40)
     }
 
-    if (!this.locked) {
+    if (!this.locked && this.time.now > this.poiCooldownUntil) {
       for (const poi of this.pois) {
         if (Phaser.Math.Distance.Between(h.x, h.y, poi.x, poi.y) < poi.r - 10) {
           this.locked = true
@@ -1142,7 +1180,7 @@ export class LobbyScene extends Phaser.Scene {
     if (equippedEntries.length === 0) {
       overlay.add(this.add.text(W/2, H/2, 'No equipped items to enchant', this.font(9, '#555566')).setOrigin(0.5))
     } else {
-      const COLS = 2, CW = 340, CH = 90, SX = W/2 - CW/2 - 5, SY = 118, GAP = 98
+      const COLS = 2, CW = 340, CH = 90, SX = W/2 - CW - 6, SY = 118, GAP = 98
       equippedEntries.forEach(([, item], idx) => {
         const col = idx % COLS
         const row = Math.floor(idx / COLS)
@@ -1246,8 +1284,9 @@ export class LobbyScene extends Phaser.Scene {
     closeBtn.on('pointerdown', () => {
       overlay.destroy()
       this.activeModal = null
-      this.resetHeroToCenter()
+      this.dismissModal()
     })
+    pinToCamera(overlay)
   }
 
   // ── Shop ──────────────────────────────────────────────────────────────────
@@ -1267,7 +1306,8 @@ export class LobbyScene extends Phaser.Scene {
     const closeBtn = this.add.rectangle(W/2, H - 36, 160, 34, 0x2a2235).setStrokeStyle(1, 0x555566).setInteractive({ useHandCursor: true })
     const closeTxt = this.add.text(W/2, H - 36, 'CLOSE', this.font(9, '#888899')).setOrigin(0.5)
     overlay.add(closeBtn); overlay.add(closeTxt)
-    closeBtn.on('pointerdown', () => { overlay.destroy(); this.resetHeroToCenter() })
+    closeBtn.on('pointerdown', () => { overlay.destroy(); this.dismissModal() })
+    pinToCamera(overlay)
 
     void fetch(`${BASE}/shop?character_id=${char.id}`)
       .then(r => r.json())
@@ -1347,6 +1387,7 @@ export class LobbyScene extends Phaser.Scene {
         if (items.length === 0) {
           overlay.add(this.add.text(W/2, 280, 'No items available for your class', this.font(9, '#555566')).setOrigin(0.5))
         }
+        pinToCamera(overlay)
       })
       .catch(() => {
         if (overlay.active) loading.setText('Could not load shop')
