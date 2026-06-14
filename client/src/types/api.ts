@@ -76,14 +76,25 @@ export interface ItemTemplate {
   id: string
   name: string
   slot: 'Helmet' | 'Armor' | 'Weapon' | 'Boots' | 'Ring' | 'Amulet'
-  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic'
-  source: 'expedition' | 'dungeon'
+  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary'
+  source: 'expedition' | 'dungeon' | 'raid'
   attack_bonus: number
   defense_bonus: number
   hp_bonus: number
   crit_bonus: number
   cdr_bonus: number
   class_restriction?: string | null
+}
+
+export interface DungeonDefinition {
+  id: string
+  name: string
+  min_level: number
+  floors: number
+  enemy_hp_mult: number
+  enemy_atk_mult: number
+  gold_mult: number
+  loot_rarities: string[]
 }
 
 export interface InventoryItem {

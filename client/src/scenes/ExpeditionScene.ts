@@ -257,7 +257,10 @@ export function buildDungeonList(
     overlay.add(scene.add.text(W/2 - 220, y + rowH/2 - 20, d.name.toUpperCase(), {
       fontFamily: FONT, fontSize: '10px', color: textCol, stroke: '#000', strokeThickness: 3,
     }))
-    overlay.add(scene.add.text(W/2 - 220, y + rowH/2 + 2, `Lv.${d.min_level}+ REQUIRED  •  ${d.floors} FLOORS`, {
+    const raritiesLabel = d.loot_rarities && d.loot_rarities.length > 0
+      ? `Drops: ${d.loot_rarities.join(', ')}`
+      : `${d.floors} FLOORS`
+    overlay.add(scene.add.text(W/2 - 220, y + rowH/2 + 2, `Lv.${d.min_level}+  •  ${raritiesLabel}`, {
       fontFamily: FONT, fontSize: '7px', color: subCol, stroke: '#000', strokeThickness: 2,
     }))
 

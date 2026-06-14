@@ -11,15 +11,15 @@ const TOTAL_ROOMS       = 6
 
 export class DungeonScene extends BaseCombat {
   private roomIndex = 0
-  private dungeonId   = 'forsaken_crypt'
-  private dungeonLabel = 'The Forsaken Crypt'
+  private dungeonId   = 'normal'
+  private dungeonLabel = 'The Crypt'
   private txtRoom!: Phaser.GameObjects.Text
 
   constructor() { super({ key: 'Dungeon' }) }
 
   init(data?: { dungeonId?: string; dungeonName?: string }): void {
-    this.dungeonId    = data?.dungeonId   ?? 'forsaken_crypt'
-    this.dungeonLabel = data?.dungeonName ?? 'The Forsaken Crypt'
+    this.dungeonId    = data?.dungeonId   ?? 'normal'
+    this.dungeonLabel = data?.dungeonName ?? 'The Crypt'
   }
 
   create(): void {
@@ -121,6 +121,7 @@ export class DungeonScene extends BaseCombat {
       const result = await request<CompleteDungeonResult>(
         'POST', '/dungeon-complete', {
           character_id: char.id,
+          dungeon_id:   this.dungeonId,
           xp:    this.sessionXP,
           gold:  this.sessionGold,
           items: this.sessionItems,
