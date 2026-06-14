@@ -461,6 +461,24 @@ type completeDungeonRequest struct {
 	Items       []string `json:"items"` // item template names
 }
 
+type droppedItemResponse struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Slot         string `json:"slot"`
+	Rarity       string `json:"rarity"`
+	AttackBonus  int    `json:"attack_bonus"`
+	DefenseBonus int    `json:"defense_bonus"`
+	HPBonus      int    `json:"hp_bonus"`
+	CritBonus    int    `json:"crit_bonus"`
+	CDRBonus     int    `json:"cdr_bonus"`
+}
+
+type completeDungeonResponse struct {
+	Character   characterResponse       `json:"character"`
+	ItemsAdded  []inventoryItemResponse `json:"items_added"`
+	DroppedItem *droppedItemResponse    `json:"dropped_item"`
+}
+
 func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 	var req completeDungeonRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CharacterID == "" {
@@ -550,6 +568,33 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Loot drop: 100% drop rate for dungeon (hard content)
+	var droppedItem *droppedItemResponse
+	var drop droppedItemResponse
+	err = s.pool.QueryRow(r.Context(), `
+		SELECT id, name, slot, rarity, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
+		FROM item_templates
+		WHERE source = 'dungeon'
+		  AND (class_restriction IS NULL OR class_restriction = $1)
+		ORDER BY RANDOM()
+		LIMIT 1
+	`, sc.c.Class).Scan(
+		&drop.ID, &drop.Name, &drop.Slot, &drop.Rarity,
+		&drop.AttackBonus, &drop.DefenseBonus, &drop.HPBonus, &drop.CritBonus, &drop.CDRBonus,
+	)
+	if err == nil {
+		if _, insertErr := s.pool.Exec(r.Context(),
+			`INSERT INTO inventory_items (character_id, item_template_id) VALUES ($1, $2)`,
+			req.CharacterID, drop.ID,
+		); insertErr != nil {
+			log.Printf("complete dungeon insert drop: %v", insertErr)
+		} else {
+			droppedItem = &drop
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		log.Printf("complete dungeon loot query: %v", err)
+	}
+
 	scEff, err := s.loadCharEffective(r.Context(), req.CharacterID)
 	if err != nil {
 		log.Printf("complete dungeon reload char: %v", err)
@@ -559,8 +604,9 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 	if itemsAdded == nil {
 		itemsAdded = []inventoryItemResponse{}
 	}
-	writeJSON(w, http.StatusOK, completeExpeditionResponse{
-		Character:  scEff.toResponse(),
-		ItemsAdded: itemsAdded,
+	writeJSON(w, http.StatusOK, completeDungeonResponse{
+		Character:   scEff.toResponse(),
+		ItemsAdded:  itemsAdded,
+		DroppedItem: droppedItem,
 	})
 }

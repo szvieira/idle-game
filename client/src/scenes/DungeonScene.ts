@@ -3,7 +3,7 @@ import { BaseCombat, ENEMY_TYPES } from './BaseCombat'
 import type { EnemyState } from './BaseCombat'
 import { GameState } from '../state/GameState'
 import { request } from '../api/client'
-import type { CompleteExpeditionResult } from '../types/api'
+import type { CompleteDungeonResult, InventoryItem } from '../types/api'
 
 const DUNGEON_ITEM_POOL = ['Crypt Blade',"Watcher's Helm",'Sepulchral Ring','Silent Boots']
 const EPIC_POOL         = ["Crypt Lord's Mantle",'Profane Axe','Crown of Bones']
@@ -118,7 +118,7 @@ export class DungeonScene extends BaseCombat {
     const char = GameState.instance.character!
     const oldLevel = char.level
     try {
-      const result = await request<CompleteExpeditionResult>(
+      const result = await request<CompleteDungeonResult>(
         'POST', '/dungeon-complete', {
           character_id: char.id,
           xp:    this.sessionXP,
@@ -130,7 +130,31 @@ export class DungeonScene extends BaseCombat {
 
       if (result.character.level > oldLevel) {
         this.banner(`LEVEL UP!  Lv.${result.character.level}`, '#ffd34d')
-        await new Promise<void>(resolve => { this.time.delayedCall(2200, resolve) })
+        await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
+      }
+
+      if (result.dropped_item) {
+        const item = result.dropped_item
+        const invItem: InventoryItem = {
+          id: '',
+          character_id: char.id,
+          item_template_id: item.id,
+          template: {
+            id: item.id,
+            name: item.name,
+            slot: item.slot as InventoryItem['template']['slot'],
+            rarity: item.rarity as InventoryItem['template']['rarity'],
+            source: 'dungeon',
+            attack_bonus: item.attack_bonus,
+            defense_bonus: item.defense_bonus,
+            hp_bonus: item.hp_bonus,
+            crit_bonus: item.crit_bonus,
+            cdr_bonus: item.cdr_bonus,
+          },
+        }
+        GameState.instance.inventory.push(invItem)
+        this.banner(`DROP: ${item.name} (${item.rarity})`, '#ffd34d')
+        await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
       }
     } catch { /* best-effort */ }
     this.scene.start('Lobby')

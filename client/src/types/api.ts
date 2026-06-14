@@ -98,9 +98,28 @@ export type EquipmentSlot = 'Helmet' | 'Armor' | 'Weapon' | 'Boots' | 'Ring' | '
 
 export type EquippedSlots = Partial<Record<EquipmentSlot, InventoryItem>>
 
+export interface DroppedItem {
+  id: string
+  name: string
+  slot: string
+  rarity: string
+  attack_bonus: number
+  defense_bonus: number
+  hp_bonus: number
+  crit_bonus: number
+  cdr_bonus: number
+}
+
 export interface CompleteExpeditionResult {
   character: Character
   items_added: InventoryItem[]
+  dropped_item?: DroppedItem | null
+}
+
+export interface CompleteDungeonResult {
+  character: Character
+  items_added: InventoryItem[]
+  dropped_item?: DroppedItem | null
 }
 
 export interface SkillNode {

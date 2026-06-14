@@ -1,0 +1,1 @@
+ALTER TABLE item_templates ADD COLUMN IF NOT EXISTS class_restriction TEXT DEFAULT NULL;
