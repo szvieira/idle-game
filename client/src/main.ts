@@ -5,6 +5,7 @@ import { CharacterCreateScene } from './scenes/CharacterCreateScene'
 import { LobbyScene } from './scenes/LobbyScene'
 import { CharacterSheetScene } from './scenes/CharacterSheetScene'
 import { ExpeditionScene } from './scenes/ExpeditionScene'
+import { ZoneMapScene } from './scenes/ZoneMapScene'
 import { DungeonScene } from './scenes/DungeonScene'
 import { RaidScene } from './scenes/RaidScene'
 
@@ -26,6 +27,7 @@ new Phaser.Game({
     LobbyScene,
     CharacterSheetScene,
     ExpeditionScene,
+    ZoneMapScene,
     DungeonScene,
     RaidScene,
   ],

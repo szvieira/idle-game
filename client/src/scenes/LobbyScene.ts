@@ -7,7 +7,7 @@ import { getInventory, getEquipped, equipItem, unequipItem } from '../api/items'
 import { getSkills, unlockSkill, equipSkill } from '../api/skills'
 import { getDungeons } from '../api/dungeons'
 import { buildDungeonList } from './ExpeditionScene'
-import { W, H, FONT } from './BaseCombat'
+import { W, H, FONT, SKILLS } from './BaseCombat'
 import type { EquipmentSlot, InventoryItem, ItemTemplate } from '../types/api'
 import type { PlayerSnap } from '../net/PresenceSocket'
 
@@ -32,6 +32,30 @@ function pinToCamera(obj: Phaser.GameObjects.GameObject): void {
   }
   o.setScrollFactor?.(0, 0)
   o.list?.forEach(pinToCamera)
+}
+
+const SKILL_DESC: Record<string, string> = {
+  // Warrior
+  whirlwind:     'Spin dealing 2.2× AoE damage',
+  brute_force:   '+10% ATK',
+  fury:          '+5 CRIT',
+  charge:        'Dash dealing 3.4× damage',
+  iron_skin:     '+15% HP',
+  vigor:         '+4 DEF',
+  // Mage
+  fireball:      'Hurl a fireball dealing 2.8× AoE damage',
+  arcane_focus:  '+10% ATK',
+  glass_cannon:  '+10 CRIT',
+  meteor:        'Call down a meteor dealing 4.5× AoE damage',
+  mana_shield:   '+8 DEF',
+  arcane_mastery:'+10% ATK',
+  // Paladin
+  holy_smite:    'Channel light dealing 2.5× AoE damage',
+  sacred_vow:    '+15% HP',
+  devotion:      '+5 DEF',
+  divine_shield: 'Absorb damage for 8s',
+  radiance:      '+8% ATK',
+  consecration:  '+5 CRIT',
 }
 
 // Equipment slot grid: 2 columns × 3 rows in the modal left panel
@@ -372,16 +396,16 @@ export class LobbyScene extends Phaser.Scene {
     // Expedition portal (right side)
     this.drawPortalArch(1600, 470, 0x5ec05e)
     this.addPOI({ x:1600, y:470, r:55, color:0x5ec05e, label:'EXPEDITION',
-      onEnter: () => this.scene.start('Expedition') })
+      onEnter: () => this.scene.start('ZoneMap') })
 
     // Dungeon portal (left side)
     this.drawPortalArch(320, 470, 0xc45aff)
     this.addPOI({ x:320, y:470, r:55, color:0xc45aff, label:'DUNGEON',
       onEnter: () => void this.openDungeonSelect() })
 
-    // Raid portal (north center, arch visually spans the horizon)
-    this.drawPortalArch(960, 395, 0xff4d6d)
-    this.addPOI({ x:960, y:395, r:52, color:0xff4d6d, label:'RAID',
+    // Raid portal (left of dungeon)
+    this.drawPortalArch(160, 470, 0xff4d6d)
+    this.addPOI({ x:160, y:470, r:52, color:0xff4d6d, label:'RAID',
       onEnter: () => this.openRaidDialog() })
 
     // Shop trigger over merchant cart
@@ -645,6 +669,13 @@ export class LobbyScene extends Phaser.Scene {
       })
       tabObjs.skills.push(lineG); modal.add(lineG)
 
+      // Shared tooltip (rendered last so it floats above nodes)
+      const ttBg  = this.add.rectangle(0, 0, 220, 52, 0x0a1a0a).setStrokeStyle(1, 0x446644).setOrigin(0)
+      const ttTxt = this.add.text(10, 8, '', this.font(6, '#aaddaa')).setOrigin(0)
+      const ttCd  = this.add.text(10, 26, '', this.font(6, '#7799aa')).setOrigin(0)
+      const tooltip = this.add.container(0, 0, [ttBg, ttTxt, ttCd]).setVisible(false).setDepth(5)
+      tabObjs.skills.push(tooltip); modal.add(tooltip)
+
       skills.nodes.forEach(node => {
         const nx = CX + node.col * CW
         const ny = BY + node.row * RH
@@ -652,10 +683,12 @@ export class LobbyScene extends Phaser.Scene {
         const isEquipped = skills.equipped_skill === node.id
         const prereqMet  = !node.requires_id || skills.unlocked.includes(node.requires_id)
         const canUnlock  = !isUnlocked && prereqMet && skills.available_points > 0
+        const actionable = canUnlock || (isUnlocked && node.type === 'active' && !isEquipped)
 
         const border = isEquipped ? 0xffd34d : isUnlocked ? 0x5ec05e : canUnlock ? 0x334466 : 0x222233
         const box = this.add.rectangle(nx, ny, 122, 46, isUnlocked ? 0x0d1a0d : 0x111128)
           .setStrokeStyle(2, border)
+          .setInteractive({ useHandCursor: actionable })
         const nameTxt = this.add.text(nx, ny - 8, node.name,
           this.font(8, isUnlocked ? '#88ff88' : canUnlock ? '#7788aa' : '#445566')).setOrigin(0.5)
         const typeTxt = this.add.text(nx, ny + 9,
@@ -665,10 +698,22 @@ export class LobbyScene extends Phaser.Scene {
         tabObjs.skills.push(box, nameTxt, typeTxt)
         modal.add(box); modal.add(nameTxt); modal.add(typeTxt)
 
-        if (canUnlock || (isUnlocked && node.type === 'active' && !isEquipped)) {
-          box.setInteractive({ useHandCursor: true })
+        box.on('pointerover', () => {
+          const desc = SKILL_DESC[node.id] ?? node.name
+          const s = SKILLS[node.id]
+          const cdLine = s ? `${s.cd}s CD  •  ${s.mpCost} MP` : ''
+          ttTxt.setText(desc)
+          ttCd.setText(cdLine)
+          ttBg.setSize(Math.max(ttTxt.width, ttCd.width) + 20, cdLine ? 44 : 28)
+          const tx = nx + 65 < 900 ? nx + 65 : nx - (ttBg.width + 5)
+          tooltip.setPosition(tx, ny - 16).setVisible(true)
+        })
+        box.on('pointerout', () => tooltip.setVisible(false))
+
+        if (actionable) {
           box.on('pointerdown', async () => {
             box.disableInteractive()
+            tooltip.setVisible(false)
             try {
               if (canUnlock) {
                 GameState.instance.skills = await unlockSkill(char.id, node.id)
