@@ -18,8 +18,12 @@ export interface SkillDef {
 }
 
 export const SKILLS: Record<string, SkillDef> = {
-  whirlwind: { name:'WHIRLWIND', mult:2.2, cd:6.0, mpCost:35, type:'aoe' },
-  charge:    { name:'CHARGE',    mult:3.4, cd:5.0, mpCost:25, type:'dash' },
+  whirlwind:    { name:'WHIRLWIND',    mult:2.2, cd:6.0, mpCost:35, type:'aoe' },
+  charge:       { name:'CHARGE',       mult:3.4, cd:5.0, mpCost:25, type:'dash' },
+  fireball:     { name:'FIREBALL',     mult:2.8, cd:5.0, mpCost:30, type:'aoe' },
+  meteor:       { name:'METEOR',       mult:4.5, cd:9.0, mpCost:55, type:'aoe' },
+  holy_smite:   { name:'HOLY SMITE',   mult:2.5, cd:5.5, mpCost:30, type:'aoe' },
+  divine_shield:{ name:'DIVINE SHIELD',mult:0.0, cd:8.0, mpCost:40, type:'dash' },
 }
 
 export interface CombatEnemyDef {
