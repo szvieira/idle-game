@@ -114,11 +114,16 @@ export abstract class BaseCombat extends Phaser.Scene {
     g.fillStyle(0x141019, 1)
     g.fillRect(0, ARENA.y1 - 25, W, H - ARENA.y1 + 25)
     g.fillStyle(0x1b1524, 1)
-    for (let ty = ARENA.y1 - 10; ty < H; ty += 44)
-      for (let tx = (ty % 88 === 0 ? 0 : 44); tx < W; tx += 88)
-        g.fillRect(tx, ty, 42, 42)
+    for (let ty = ARENA.y1 - 10; ty < H; ty += 52)
+      for (let tx = (ty % 104 === 0 ? 0 : 52); tx < W; tx += 104)
+        g.fillRect(tx, ty, 50, 50)
     g.fillStyle(0x241c2e, 1); g.fillRect(0, ARENA.y1 - 28, W, 8)
-    for (let i = 0; i < 8; i++) {
+    // Depth gradient at top of floor
+    for (let i = 0; i < 4; i++) {
+      g.fillStyle(0x000000, 0.06 * (4 - i))
+      g.fillRect(0, ARENA.y1 + i * 9, W, 9)
+    }
+    for (let i = 0; i < 14; i++) {
       this.add.rectangle(
         Phaser.Math.Between(ARENA.x1, ARENA.x2),
         Phaser.Math.Between(ARENA.y1, ARENA.y2),
@@ -126,8 +131,8 @@ export abstract class BaseCombat extends Phaser.Scene {
     }
     // Torches
     ;[120, 840].forEach(x => {
-      this.add.rectangle(x, 158, 8, 60, 0x4a3b2a).setDepth(-3)
-      const flame = this.add.rectangle(x, 120, 14, 16, 0xffa726).setDepth(-3)
+      this.add.rectangle(x, 100, 8, 50, 0x4a3b2a).setDepth(-3)
+      const flame = this.add.rectangle(x, 72, 14, 16, 0xffa726).setDepth(-3)
       this.tweens.add({ targets:flame, scaleY:1.4, alpha:0.7, duration:260, yoyo:true, repeat:-1 })
     })
   }
