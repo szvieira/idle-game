@@ -193,21 +193,20 @@ export abstract class BaseCombat extends Phaser.Scene {
     this.heroHudMp = this.add.graphics().setDepth(20)
     this.heroHudXp = this.add.graphics().setDepth(20)
 
-    const bx = W-90, by = H-90
+    const bx = W-60, by = H-25
     this.skillCdArc = this.add.graphics()
-    this.skillMpLbl = this.add.text(bx, by-34, this.skill.mpCost+' MP', this.font(7,'#7fd4ff')).setOrigin(0.5)
-    const ring = this.add.circle(bx, by, 44, 0x241c2e).setStrokeStyle(4, 0xffd34d)
-    const icon = this.add.text(bx, by-6, this.skill.type === 'aoe' ? '*' : '>', this.font(26,'#7fd4ff')).setOrigin(0.5)
-    const lbl  = this.add.text(bx, by+28, this.skill.name, this.font(7)).setOrigin(0.5)
-    this.skillBtn = this.add.container(0, 0, [ring, icon, lbl, this.skillMpLbl, this.skillCdArc])
-    this.skillBtn.setDepth(20).setSize(96, 96).setInteractive({
-      hitArea: new Phaser.Geom.Rectangle(bx - 48, by - 48, 96, 96),
+    this.skillMpLbl = this.add.text(bx, by-28, this.skill.mpCost+' MP', this.font(6,'#7fd4ff')).setOrigin(0.5)
+    const ring = this.add.circle(bx, by, 22, 0x241c2e).setStrokeStyle(3, 0xffd34d)
+    const icon = this.add.text(bx, by-3, this.skill.type === 'aoe' ? '*' : '>', this.font(13,'#7fd4ff')).setOrigin(0.5)
+    this.skillBtn = this.add.container(0, 0, [ring, icon, this.skillMpLbl, this.skillCdArc])
+    this.skillBtn.setDepth(20).setSize(56, 56).setInteractive({
+      hitArea: new Phaser.Geom.Rectangle(bx - 28, by - 28, 56, 56),
       hitAreaCallback: Phaser.Geom.Rectangle.Contains,
       useHandCursor: true,
     })
     this.skillBtn.on('pointerdown', () => this.tryCastSkill(true))
 
-    this.autoTxt = this.add.text(bx, by+58, 'AUTO: ON', this.font(8,'#5ec05e'))
+    this.autoTxt = this.add.text(W-130, H-18, 'AUTO: ON', this.font(6,'#5ec05e'))
       .setOrigin(0.5).setDepth(20).setInteractive({ useHandCursor: true })
       .on('pointerdown', () => {
         this.autoSkill = !this.autoSkill
