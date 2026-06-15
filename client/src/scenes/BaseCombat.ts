@@ -296,10 +296,10 @@ export abstract class BaseCombat extends Phaser.Scene {
       h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.03 * dt)
     }
 
-    this.drawBar(this.heroHudHp, 20, H-72, 240, 14, h.hp/h.maxHp, 0x5ec05e)
-    this.drawBar(this.heroHudMp, 20, H-52, 240, 10, h.mp/h.maxMp, 0x4da3ff)
+    this.drawBar(this.heroHudHp, 20, H-34, 240, 10, h.hp/h.maxHp, 0x5ec05e)
+    this.drawBar(this.heroHudMp, 20, H-20, 240, 8,  h.mp/h.maxMp, 0x4da3ff)
     const char = GameState.instance.character!
-    this.drawBar(this.heroHudXp, 20, H-36, 240, 6, char.xp/char.xp_to_next, 0xffd34d)
+    this.drawBar(this.heroHudXp, 20, H-9,  240, 6,  char.xp/char.xp_to_next, 0xffd34d)
     this.drawBar(h.hpBar, h.x-28, h.y-52, 56, 6, h.hp/h.maxHp, 0x5ec05e)
     this.aliveEnemies().forEach(e =>
       this.drawBar(e.hpBar, e.x - e.barW/2, e.y - e.barOff, e.barW, 6, e.hp/e.maxHp, 0xc03a3a))
@@ -310,7 +310,7 @@ export abstract class BaseCombat extends Phaser.Scene {
     if (cdLeft > 0) {
       const frac = cdLeft / (this.skill.cd * 1000 * (1 - h.cdr))
       this.skillCdArc.fillStyle(0x000000, 0.6)
-      this.skillCdArc.slice(W-90, H-90, 44, -Math.PI/2, -Math.PI/2 + frac*Math.PI*2, false)
+      this.skillCdArc.slice(W-60, H-25, 22, -Math.PI/2, -Math.PI/2 + frac*Math.PI*2, false)
       this.skillCdArc.fillPath()
     }
     this.skillMpLbl.setColor(h.mp >= this.skill.mpCost ? '#7fd4ff' : '#c03a3a')
