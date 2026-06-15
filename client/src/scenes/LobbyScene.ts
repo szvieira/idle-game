@@ -905,7 +905,13 @@ export class LobbyScene extends Phaser.Scene {
       loading.destroy()
       buildDungeonList(this, overlay, defs, char.level, (d) => {
         overlay.destroy()
-        this.scene.start('Dungeon', { dungeonId: d.id, dungeonName: d.name, minLevel: d.min_level })
+        this.scene.start('Dungeon', {
+          dungeonId:    d.id,
+          dungeonName:  d.name,
+          enemyHpMult:  d.enemy_hp_mult,
+          enemyAtkMult: d.enemy_atk_mult,
+          goldMult:     d.gold_mult,
+        })
       })
       pinToCamera(overlay)
     } catch {

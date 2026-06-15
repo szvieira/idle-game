@@ -2,24 +2,28 @@ import Phaser from 'phaser'
 import { BaseCombat, ENEMY_TYPES } from './BaseCombat'
 import type { EnemyState } from './BaseCombat'
 import { GameState } from '../state/GameState'
-import { request } from '../api/client'
-import type { CompleteDungeonResult, InventoryItem } from '../types/api'
+import { createDungeonRun, claimDungeonRun } from '../api/dungeons'
+import type { InventoryItem } from '../types/api'
 
-const DUNGEON_ITEM_POOL = ['Crypt Blade',"Watcher's Helm",'Sepulchral Ring','Silent Boots']
-const EPIC_POOL         = ["Crypt Lord's Mantle",'Profane Axe','Crown of Bones']
-const TOTAL_ROOMS       = 6
+const TOTAL_ROOMS = 6
 
 export class DungeonScene extends BaseCombat {
-  private roomIndex = 0
-  private dungeonId   = 'normal'
+  private roomIndex    = 0
+  private dungeonId    = 'normal'
   private dungeonLabel = 'The Crypt'
+  private enemyHpMult  = 1
+  private enemyAtkMult = 1
+  private goldMult     = 1
   private txtRoom!: Phaser.GameObjects.Text
 
   constructor() { super({ key: 'Dungeon' }) }
 
-  init(data?: { dungeonId?: string; dungeonName?: string }): void {
-    this.dungeonId    = data?.dungeonId   ?? 'normal'
-    this.dungeonLabel = data?.dungeonName ?? 'The Crypt'
+  init(data?: { dungeonId?: string; dungeonName?: string; enemyHpMult?: number; enemyAtkMult?: number; goldMult?: number }): void {
+    this.dungeonId    = data?.dungeonId    ?? 'normal'
+    this.dungeonLabel = data?.dungeonName  ?? 'The Crypt'
+    this.enemyHpMult  = data?.enemyHpMult  ?? 1
+    this.enemyAtkMult = data?.enemyAtkMult ?? 1
+    this.goldMult     = data?.goldMult     ?? 1
   }
 
   create(): void {
@@ -55,16 +59,24 @@ export class DungeonScene extends BaseCombat {
     const scale  = 1 + this.roomIndex * 0.3
     const isBoss = this.roomIndex === TOTAL_ROOMS - 1
     const total  = isBoss ? 1 : 4 + Math.min(this.roomIndex, 3)
-    // Use harder enemies for later rooms
-    const pool = isBoss
+
+    const basePool = isBoss
       ? [{ ...ENEMY_TYPES[2], key:'boss', name:'Crypt Boss', hp:300, atk:22, atkSpeed:2.5, gold:50, speed:60, aggro:300, range:70 }]
-      : ENEMY_TYPES.slice(1, 3) // bats + skeletons only
+      : ENEMY_TYPES.slice(1, 3)
+
+    // Apply dungeon-tier multipliers to base stats before room scaling
+    const pool = basePool.map(def => ({
+      ...def,
+      hp:   Math.round(def.hp   * this.enemyHpMult),
+      atk:  Math.round(def.atk  * this.enemyAtkMult),
+      gold: Math.round(def.gold * this.goldMult),
+    }))
+
     this.enemies = this.spawnPacks(total, scale, pool)
     if (isBoss && this.enemies[0]) {
       this.enemies[0].boss = true
       this.enemies[0].barW = 80
       this.enemies[0].barOff = 70
-      // Boss visual weight: larger sprite + ominous red tint
       this.enemies[0].sprite.setScale(1.5).setTint(0xff5544)
       this.enemies[0].shadow.setSize(70, 16)
     }
@@ -74,17 +86,6 @@ export class DungeonScene extends BaseCombat {
   protected onEnemyKilled(e: EnemyState): void {
     this.sessionGold += e.gold
     this.sessionXP   += Math.round(8 + e.maxHp * 0.1)
-    // Drop chance: 5% Epic, else 15% Rare per enemy
-    const roll = Math.random()
-    if (roll < 0.05) {
-      const itemName = Phaser.Utils.Array.GetRandom(EPIC_POOL)
-      this.sessionItems.push(itemName)
-      this.banner(itemName.toUpperCase(), '#c45aff')
-    } else if (roll < 0.20) {
-      const itemName = Phaser.Utils.Array.GetRandom(DUNGEON_ITEM_POOL)
-      this.sessionItems.push(itemName)
-      this.banner(itemName.toUpperCase(), '#4da3ff')
-    }
   }
 
   protected onRoomCleared(): void {
@@ -108,9 +109,8 @@ export class DungeonScene extends BaseCombat {
   protected onHeroDown(): void {
     if (this.busy) return
     this.busy = true
-    this.banner('DEFEATED — loot lost', '#c03a3a')
+    this.banner('DEFEATED — no rewards', '#c03a3a')
     this.tweens.add({ targets:this.hero.doll, angle:-90, alpha:0.4, duration:400 })
-    // On death: no loot, just return
     this.time.delayedCall(2000, () => this.scene.start('Lobby'))
   }
 
@@ -118,43 +118,36 @@ export class DungeonScene extends BaseCombat {
     const char = GameState.instance.character!
     const oldLevel = char.level
     try {
-      const result = await request<CompleteDungeonResult>(
-        'POST', '/dungeon-complete', {
-          character_id: char.id,
-          dungeon_id:   this.dungeonId,
-          xp:    this.sessionXP,
-          gold:  this.sessionGold,
-          items: this.sessionItems,
-        })
-      GameState.instance.character = result.character
-      GameState.instance.inventory.push(...result.items_added)
+      const run = await createDungeonRun(this.dungeonId, char.id)
+      const claim = await claimDungeonRun(run.run_id, char.id)
 
-      if (result.character.level > oldLevel) {
-        this.banner(`LEVEL UP!  Lv.${result.character.level}`, '#ffd34d')
+      GameState.instance.character = claim.character
+
+      if (claim.character.level > oldLevel) {
+        this.banner(`LEVEL UP!  Lv.${claim.character.level}`, '#ffd34d')
         await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
       }
 
-      if (result.dropped_item) {
-        const item = result.dropped_item
+      for (const loot of claim.loot) {
         const invItem: InventoryItem = {
-          id: '',
+          id: loot.inventory_item_id,
           character_id: char.id,
-          item_template_id: item.id,
+          item_template_id: '',
           template: {
-            id: item.id,
-            name: item.name,
-            slot: item.slot as InventoryItem['template']['slot'],
-            rarity: item.rarity as InventoryItem['template']['rarity'],
+            id: '',
+            name: loot.name,
+            slot: loot.slot as InventoryItem['template']['slot'],
+            rarity: loot.rarity as InventoryItem['template']['rarity'],
             source: 'dungeon',
-            attack_bonus: item.attack_bonus,
-            defense_bonus: item.defense_bonus,
-            hp_bonus: item.hp_bonus,
-            crit_bonus: item.crit_bonus,
-            cdr_bonus: item.cdr_bonus,
+            attack_bonus: 0,
+            defense_bonus: 0,
+            hp_bonus: 0,
+            crit_bonus: 0,
+            cdr_bonus: 0,
           },
         }
         GameState.instance.inventory.push(invItem)
-        this.banner(`DROP: ${item.name} (${item.rarity})`, '#ffd34d')
+        this.banner(`DROP: ${loot.name} (${loot.rarity})`, '#ffd34d')
         await new Promise<void>(resolve => { this.time.delayedCall(2000, resolve) })
       }
     } catch { /* best-effort */ }

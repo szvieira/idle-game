@@ -133,6 +133,28 @@ export interface CompleteDungeonResult {
   dropped_item?: DroppedItem | null
 }
 
+export interface DungeonRunResult {
+  run_id: string
+  status: string
+  dungeon_name: string
+  rooms_cleared: number
+  outcome: string
+  rewards_available: boolean
+}
+
+export interface DungeonRunLoot {
+  inventory_item_id: string
+  name: string
+  rarity: string
+  slot: string
+}
+
+export interface ClaimDungeonRunResult {
+  success: boolean
+  character: Character
+  loot: DungeonRunLoot[]
+}
+
 export interface SkillNode {
   id: string
   name: string

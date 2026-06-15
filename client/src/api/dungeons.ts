@@ -1,4 +1,5 @@
 import { request } from './client'
+import type { DungeonRunResult, ClaimDungeonRunResult } from '../types/api'
 
 export interface DungeonDef {
   id: string
@@ -13,4 +14,15 @@ export interface DungeonDef {
 
 export function getDungeons(): Promise<DungeonDef[]> {
   return request<DungeonDef[]>('GET', '/dungeon-definitions')
+}
+
+export function createDungeonRun(dungeonDefinitionId: string, characterId: string): Promise<DungeonRunResult> {
+  return request<DungeonRunResult>('POST', '/dungeon-runs', {
+    dungeon_definition_id: dungeonDefinitionId,
+    participants: [characterId],
+  })
+}
+
+export function claimDungeonRun(runId: string, characterId: string): Promise<ClaimDungeonRunResult> {
+  return request<ClaimDungeonRunResult>('POST', `/dungeon-runs/${runId}/claim`, { character_id: characterId })
 }

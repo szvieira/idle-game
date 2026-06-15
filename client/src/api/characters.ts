@@ -1,5 +1,5 @@
 import type { Character } from '../types/api'
-import { request } from './client'
+import { ApiError, request } from './client'
 
 const CHAR_IDS_KEY = 'characterIds'
 
@@ -15,10 +15,26 @@ function addStoredId(id: string): void {
   }
 }
 
+function removeStoredId(id: string): void {
+  const ids = getStoredIds().filter(x => x !== id)
+  localStorage.setItem(CHAR_IDS_KEY, JSON.stringify(ids))
+}
+
 export async function getCharacters(): Promise<Character[]> {
   const ids = getStoredIds()
   if (ids.length === 0) return []
-  return Promise.all(ids.map(id => request<Character>('GET', `/characters/${id}`)))
+  const results = await Promise.all(
+    ids.map(id =>
+      request<Character>('GET', `/characters/${id}`).catch(err => {
+        if (err instanceof ApiError && err.status === 404) {
+          removeStoredId(id)
+          return null
+        }
+        throw err
+      }),
+    ),
+  )
+  return results.filter((c): c is Character => c !== null)
 }
 
 export async function createCharacter(name: string, cls: string): Promise<Character> {
