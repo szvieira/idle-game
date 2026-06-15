@@ -4,8 +4,8 @@ import { PaperDollContainer } from '../combat/PaperDollContainer'
 import type { EquipmentSlot } from '../types/api'
 
 export const W = 960, H = 540
-export const FONT = '"Press Start 2P", monospace'
-export const ARENA = { x1: 50, y1: 215, x2: 910, y2: 500 }
+export const FONT = '"Exo 2", sans-serif'
+export const ARENA = { x1: 50, y1: 140, x2: 910, y2: 500 }
 export const SKILL_RADIUS = 150
 const MP_REGEN = 7
 
@@ -137,7 +137,7 @@ export abstract class BaseCombat extends Phaser.Scene {
     const skills = GameState.instance.skills
     this.skill = SKILLS[skills.equipped_skill] ?? SKILLS['whirlwind']
 
-    const doll = new PaperDollContainer(this, 130, 360, char.class)
+    const doll = new PaperDollContainer(this, 220, 430, char.class)
     doll.setDepth(3)
     // Apply equipped items to doll
     for (const [slot, item] of Object.entries(GameState.instance.equipped)) {
@@ -152,10 +152,10 @@ export abstract class BaseCombat extends Phaser.Scene {
       critMult: 2.0,       cdr:  char.cdr / 100,
       speed: 175,
       nextAtk: 0, skillReady: 0, castLock: 0,
-      x: 130, y: 360,
+      x: 220, y: 430,
       dollOffX: 0, dollOffY: 0,
       doll,
-      shadow: this.add.ellipse(130, 392, 50, 12, 0x000000, 0.35).setDepth(1),
+      shadow: this.add.ellipse(220, 462, 50, 12, 0x000000, 0.35).setDepth(1),
       hpBar:  this.add.graphics().setDepth(8),
     }
 
@@ -782,8 +782,8 @@ export abstract class BaseCombat extends Phaser.Scene {
       remaining -= packSize
       let cx=0, cy=0, tries=0
       do {
-        cx = Phaser.Math.Between(ARENA.x1+200, ARENA.x2-40)
-        cy = Phaser.Math.Between(ARENA.y1+30, ARENA.y2-30)
+        cx = Phaser.Math.Between(ARENA.x1+250, ARENA.x2-40)
+        cy = Phaser.Math.Between(ARENA.y1+40, ARENA.y2-50)
         tries++
       } while (tries < 20 && (
         Phaser.Math.Distance.Between(cx, cy, this.hero.x, this.hero.y) < 240 ||
