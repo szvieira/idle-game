@@ -23,11 +23,11 @@ export class CharacterCreateScene extends Phaser.Scene {
     const { width } = this.scale
 
     this.add.text(width / 2, 30, 'Create Character', {
-      font: '24px monospace',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '24px',
       color: '#ffffff',
     }).setOrigin(0.5)
 
-    this.add.text(60, 88, 'Name:', { font: '16px monospace', color: '#cccccc' })
+    this.add.text(60, 88, 'Name:', { fontFamily: '"Exo 2", sans-serif', fontSize: '16px', color: '#cccccc' })
     const inputEl = document.createElement('input')
     inputEl.type = 'text'
     inputEl.maxLength = 24
@@ -36,7 +36,7 @@ export class CharacterCreateScene extends Phaser.Scene {
     inputEl.addEventListener('input', () => this.refreshConfirm())
 
     this.add.text(width / 2, 148, 'Choose Class', {
-      font: '16px monospace',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '16px',
       color: '#cccccc',
     }).setOrigin(0.5)
 
@@ -53,9 +53,9 @@ export class CharacterCreateScene extends Phaser.Scene {
         .setInteractive({ useHandCursor: true })
       classBgs.push(bg)
 
-      this.add.text(x, cardY - 44, cls,  { font: '18px monospace', color: '#ffffff' }).setOrigin(0.5)
-      this.add.text(x, cardY - 18, role, { font: '12px monospace', color: '#aaaaaa' }).setOrigin(0.5)
-      this.add.text(x, cardY + 6,  desc, { font: '12px monospace', color: '#888888' }).setOrigin(0.5)
+      this.add.text(x, cardY - 44, cls,  { fontFamily: '"Exo 2", sans-serif', fontSize: '18px', color: '#ffffff' }).setOrigin(0.5)
+      this.add.text(x, cardY - 18, role, { fontFamily: '"Exo 2", sans-serif', fontSize: '12px', color: '#aaaaaa' }).setOrigin(0.5)
+      this.add.text(x, cardY + 6,  desc, { fontFamily: '"Exo 2", sans-serif', fontSize: '12px', color: '#888888' }).setOrigin(0.5)
 
       bg.on('pointerdown', () => {
         this.selectedClass = cls
@@ -69,12 +69,12 @@ export class CharacterCreateScene extends Phaser.Scene {
     this.confirmBtn = this.add.rectangle(width / 2, 370, 200, 44, 0x333333)
       .setStrokeStyle(1, 0x555555)
     this.confirmLabel = this.add.text(width / 2, 370, 'Confirm', {
-      font: '18px monospace',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '18px',
       color: '#666666',
     }).setOrigin(0.5)
 
     this.errorText = this.add.text(width / 2, 424, '', {
-      font: '14px monospace',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '14px',
       color: '#ff4444',
     }).setOrigin(0.5)
   }

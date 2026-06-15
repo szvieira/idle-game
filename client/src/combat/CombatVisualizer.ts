@@ -63,26 +63,26 @@ export class CombatVisualizer {
     const barW = 200
 
     this.roomText = this.track(s.add.text(this.ax(108), this.ay(5), '', {
-      font: '11px monospace', color: '#666666',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '11px', color: '#666666',
     }).setOrigin(0.5, 0))
 
     this.statusText = this.track(s.add.text(this.ax(108), this.ay(16), '', {
-      font: '10px monospace', color: '#aaaaaa',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '10px', color: '#aaaaaa',
     }).setOrigin(0.5, 0))
 
     this.enemyHpBarBg = this.track(s.add.rectangle(this.ax(108), this.ay(32), barW, 6, 0x440000))
     this.enemyHpBar   = this.track(s.add.rectangle(this.ax(8 + barW / 2), this.ay(32), barW, 6, 0xcc2222))
 
     this.enemyNameText = this.track(s.add.text(this.ax(108), this.ay(42), '', {
-      font: '11px monospace', color: '#ffaaaa',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '11px', color: '#ffaaaa',
     }).setOrigin(0.5, 0))
 
     this.enemyRect = this.track(s.add.rectangle(this.ax(136), this.ay(87), 38, 50, 0x5a0000).setStrokeStyle(1, 0xff4444))
-    this.track(s.add.text(this.ax(136), this.ay(87), 'E', { font: '14px monospace', color: '#ff6666' }).setOrigin(0.5))
+    this.track(s.add.text(this.ax(136), this.ay(87), 'E', { fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#ff6666' }).setOrigin(0.5))
 
     this.playerRect = this.track(s.add.rectangle(this.ax(80), this.ay(87), 34, 50, 0x1a2a5e).setStrokeStyle(1, 0x4488ff))
     this.playerLabel = this.track(s.add.text(this.ax(80), this.ay(87), this.char?.class?.[0] ?? '?', {
-      font: '14px monospace', color: '#88bbff',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#88bbff',
     }).setOrigin(0.5))
 
     this.playerHpBarBg = this.track(s.add.rectangle(this.ax(108), this.ay(157), barW, 6, 0x004400))
@@ -200,7 +200,7 @@ export class CombatVisualizer {
   }
 
   private floatText(worldX: number, worldY: number, text: string, color: string): void {
-    const t = this.track(this.scene.add.text(worldX, worldY, text, { font: '13px monospace', color }).setOrigin(0.5))
+    const t = this.track(this.scene.add.text(worldX, worldY, text, { fontFamily: '"Exo 2", sans-serif', fontSize: '13px', color }).setOrigin(0.5))
     this.scene.tweens.add({
       targets: t, y: worldY - 28, alpha: 0,
       duration: 900, ease: 'Power1',

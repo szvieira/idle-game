@@ -47,7 +47,7 @@ export class BootScene extends Phaser.Scene {
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
       this.add.text(10, 10, 'Error: ' + msg, {
-        font: '16px monospace',
+        fontFamily: '"Exo 2", sans-serif', fontSize: '16px',
         color: '#ff4444',
       })
     }

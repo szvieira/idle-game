@@ -13,7 +13,7 @@ export class CharacterSelectScene extends Phaser.Scene {
       this.render(characters)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
-      this.add.text(10, 10, 'Error: ' + msg, { font: '16px monospace', color: '#ff4444' })
+      this.add.text(10, 10, 'Error: ' + msg, { fontFamily: '"Exo 2", sans-serif', fontSize: '16px', color: '#ff4444' })
     }
   }
 
@@ -21,7 +21,7 @@ export class CharacterSelectScene extends Phaser.Scene {
     const { width } = this.scale
 
     this.add.text(width / 2, 30, 'Select Your Character', {
-      font: '24px monospace',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '24px',
       color: '#ffffff',
     }).setOrigin(0.5)
 
@@ -36,10 +36,10 @@ export class CharacterSelectScene extends Phaser.Scene {
         .setStrokeStyle(1, 0x444444)
         .setInteractive({ useHandCursor: true })
 
-      this.add.text(cardX - 230, y + 10, char.name, { font: '18px monospace', color: '#ffffff' })
-      this.add.text(cardX - 230, y + 34, `${char.class}  Lv.${char.level}`, { font: '14px monospace', color: '#aaaaaa' })
-      this.add.text(cardX + 80, y + 10, `HP: ${char.hp}/${char.max_hp}`, { font: '14px monospace', color: '#aaaaaa' })
-      this.add.text(cardX + 80, y + 34, `Gold: ${char.gold}`, { font: '14px monospace', color: '#aaaaaa' })
+      this.add.text(cardX - 230, y + 10, char.name, { fontFamily: '"Exo 2", sans-serif', fontSize: '18px', color: '#ffffff' })
+      this.add.text(cardX - 230, y + 34, `${char.class}  Lv.${char.level}`, { fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#aaaaaa' })
+      this.add.text(cardX + 80, y + 10, `HP: ${char.hp}/${char.max_hp}`, { fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#aaaaaa' })
+      this.add.text(cardX + 80, y + 34, `Gold: ${char.gold}`, { fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#aaaaaa' })
 
       bg.on('pointerover', () => bg.setFillStyle(0x333333))
       bg.on('pointerout', () => bg.setFillStyle(0x222222))
@@ -53,7 +53,7 @@ export class CharacterSelectScene extends Phaser.Scene {
     const createBtn = this.add.rectangle(cardX, createY + 20, 200, 40, 0x334455)
       .setStrokeStyle(1, 0x6688aa)
       .setInteractive({ useHandCursor: true })
-    this.add.text(cardX, createY + 20, 'Create New', { font: '16px monospace', color: '#ffffff' }).setOrigin(0.5)
+    this.add.text(cardX, createY + 20, 'Create New', { fontFamily: '"Exo 2", sans-serif', fontSize: '16px', color: '#ffffff' }).setOrigin(0.5)
 
     createBtn.on('pointerover', () => createBtn.setFillStyle(0x445566))
     createBtn.on('pointerout', () => createBtn.setFillStyle(0x334455))

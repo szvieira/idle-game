@@ -55,7 +55,7 @@ export class CharacterSheetScene extends Phaser.Scene {
       const x = 160 + i * 180
       const btn = this.add.rectangle(x, 40, 160, 36, this.activeTab === tab ? 0x334466 : 0x222233)
         .setStrokeStyle(1, 0x445577).setInteractive({ useHandCursor: true })
-      this.add.text(x, 40, tab.toUpperCase(), { font: '12px monospace', color: '#aaaacc' }).setOrigin(0.5)
+      this.add.text(x, 40, tab.toUpperCase(), { fontFamily: '"Exo 2", sans-serif', fontSize: '12px', color: '#aaaacc' }).setOrigin(0.5)
       btn.on('pointerdown', () => this.switchTab(tab, tabBtns, tabs))
       return btn
     })
@@ -63,7 +63,7 @@ export class CharacterSheetScene extends Phaser.Scene {
     // Back button
     const backBtn = this.add.rectangle(700, 40, 120, 36, 0x334455)
       .setStrokeStyle(1, 0x6688aa).setInteractive({ useHandCursor: true })
-    this.add.text(700, 40, 'BACK', { font: '12px monospace', color: '#ffffff' }).setOrigin(0.5)
+    this.add.text(700, 40, 'BACK', { fontFamily: '"Exo 2", sans-serif', fontSize: '12px', color: '#ffffff' }).setOrigin(0.5)
     backBtn.on('pointerdown', () => this.scene.start('Lobby'))
 
     // Load data
@@ -78,7 +78,7 @@ export class CharacterSheetScene extends Phaser.Scene {
       GameState.instance.skills    = skills
     } catch {
       this.add.text(400, 300, 'Error loading data', {
-        font: '14px monospace', color: '#ff4444',
+        fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#ff4444',
       }).setOrigin(0.5)
       return
     }
@@ -128,7 +128,7 @@ export class CharacterSheetScene extends Phaser.Scene {
     ]
     statLines.forEach((line, i) => {
       objs.push(this.add.text(20, 80 + i * 28, line, {
-        font: '13px monospace', color: '#cccccc',
+        fontFamily: '"Exo 2", sans-serif', fontSize: '13px', color: '#cccccc',
       }))
     })
 
@@ -141,10 +141,10 @@ export class CharacterSheetScene extends Phaser.Scene {
         .setStrokeStyle(1, color)
       objs.push(box)
       objs.push(this.add.text(pos.x, pos.y - 8, slot,
-        { font: '9px monospace', color: '#666688' }).setOrigin(0.5))
+        { fontFamily: '"Exo 2", sans-serif', fontSize: '9px', color: '#666688' }).setOrigin(0.5))
       objs.push(this.add.text(pos.x, pos.y + 9,
         item ? item.template.name : '—',
-        { font: '10px monospace',
+        { fontFamily: '"Exo 2", sans-serif', fontSize: '10px',
           color: item ? `#${color.toString(16).padStart(6,'0')}` : '#444466',
         }).setOrigin(0.5))
     }
@@ -159,12 +159,12 @@ export class CharacterSheetScene extends Phaser.Scene {
     const objs: Phaser.GameObjects.GameObject[] = []
 
     objs.push(this.add.text(400, 75, 'INVENTORY', {
-      font: '14px monospace', color: '#aaaacc',
+      fontFamily: '"Exo 2", sans-serif', fontSize: '14px', color: '#aaaacc',
     }).setOrigin(0.5))
 
     if (inventory.length === 0) {
       objs.push(this.add.text(400, 300, 'No items', {
-        font: '13px monospace', color: '#555566',
+        fontFamily: '"Exo 2", sans-serif', fontSize: '13px', color: '#555566',
       }).setOrigin(0.5))
     }
 
@@ -185,7 +185,7 @@ export class CharacterSheetScene extends Phaser.Scene {
       objs.push(box)
 
       objs.push(this.add.text(x, y - 10, item.template.name,
-        { font: '10px monospace',
+        { fontFamily: '"Exo 2", sans-serif', fontSize: '10px',
           color: `#${color.toString(16).padStart(6,'0')}` }).setOrigin(0.5))
 
       const statsStr = [
@@ -196,7 +196,7 @@ export class CharacterSheetScene extends Phaser.Scene {
         item.template.cdr_bonus     ? `+${item.template.cdr_bonus}% CDR`    : '',
       ].filter(Boolean).join(' ')
       objs.push(this.add.text(x, y + 8, statsStr,
-        { font: '9px monospace', color: '#888899' }).setOrigin(0.5))
+        { fontFamily: '"Exo 2", sans-serif', fontSize: '9px', color: '#888899' }).setOrigin(0.5))
 
       box.on('pointerdown', async () => {
         box.disableInteractive()
@@ -232,7 +232,7 @@ export class CharacterSheetScene extends Phaser.Scene {
 
     objs.push(this.add.text(CENTER_X, 75,
       `SKILL TREE   —   ${skills.available_points} point(s) available`,
-      { font: '12px monospace', color: '#aaaacc' }).setOrigin(0.5))
+      { fontFamily: '"Exo 2", sans-serif', fontSize: '12px', color: '#aaaacc' }).setOrigin(0.5))
 
     // Draw connector lines first
     const g = this.add.graphics()
@@ -268,12 +268,12 @@ export class CharacterSheetScene extends Phaser.Scene {
 
       objs.push(box)
       objs.push(this.add.text(nx, ny - 8, node.name,
-        { font: '10px monospace',
+        { fontFamily: '"Exo 2", sans-serif', fontSize: '10px',
           color: isUnlocked ? '#88ff88' : canUnlock ? '#7788aa' : '#445566',
         }).setOrigin(0.5))
       objs.push(this.add.text(nx, ny + 9,
         isEquipped ? 'EQUIPPED' : node.type.toUpperCase(),
-        { font: '8px monospace',
+        { fontFamily: '"Exo 2", sans-serif', fontSize: '8px',
           color: isEquipped ? '#ffd34d' : '#556677',
         }).setOrigin(0.5))
 

@@ -20,6 +20,10 @@ new Phaser.Game({
     height: 540,
     parent: document.body,
   },
+  render: {
+    resolution: window.devicePixelRatio,
+    antialias: true,
+  },
   scene: [
     BootScene,
     CharacterSelectScene,
