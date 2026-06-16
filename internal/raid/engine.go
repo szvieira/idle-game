@@ -291,6 +291,21 @@ func (eng *Engine) Outcome() string {
 	return eng.outcome
 }
 
+// Done returns a channel that is closed when the engine stops.
+func (eng *Engine) Done() <-chan struct{} {
+	return eng.done
+}
+
+// RemovePlayer marks a player as dead (e.g. on WebSocket disconnect) so that
+// checkEnd can fire a defeat and stop the engine goroutine.
+func (eng *Engine) RemovePlayer(charID string) {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if p, ok := eng.players[charID]; ok {
+		p.Dead = true
+	}
+}
+
 func (eng *Engine) sendAll(msg []byte) {
 	for _, p := range eng.players {
 		select {

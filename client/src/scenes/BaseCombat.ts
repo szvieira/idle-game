@@ -599,6 +599,9 @@ export abstract class BaseCombat extends Phaser.Scene {
         // Central burst
         const burst = this.add.circle(e.x, e.y, 22, 0xff5500, 0.7).setDepth(10)
         this.tweens.add({ targets: burst, scale: 2.5, alpha: 0, duration: 300, onComplete: () => burst.destroy() })
+        // AoE damage centred on impact point
+        const dmg = Math.round(this.hero.atk * this.skill.mult)
+        this.enemiesWithin({ x: e.x, y: e.y }, 80).forEach(en => this.applyDamage(en, dmg, false, '#ff8800'))
       }
     })
   }
@@ -638,6 +641,10 @@ export abstract class BaseCombat extends Phaser.Scene {
             onComplete: () => d.destroy()
           })
         }
+        // AoE damage centred on impact point
+        const dmg = Math.round(this.hero.atk * this.skill.mult)
+        this.enemiesWithin({ x: e.x, y: e.y }, 100).forEach(en => this.applyDamage(en, dmg, false, '#ff4400'))
+        this.cameras.main.shake(220, 0.010)
       }
     })
   }
@@ -661,6 +668,11 @@ export abstract class BaseCombat extends Phaser.Scene {
     const ang = Phaser.Math.Angle.Between(this.hero.x, this.hero.y, e.x, e.y)
     ray.setRotation(ang)
     this.tweens.add({ targets: ray, alpha: 0, scaleX: 0.3, duration: 300, onComplete: () => ray.destroy() })
+    // Apply damage to target
+    this.time.delayedCall(150, () => {
+      const dmg = Math.round(this.hero.atk * this.skill.mult)
+      this.applyDamage(e, dmg, false, '#ffd34d')
+    })
     // Heal text (if Paladin heals on this skill)
     const healAmt = GameState.instance.character?.class === 'Paladin' ? '+heal' : ''
     if (healAmt) {

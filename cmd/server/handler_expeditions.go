@@ -327,7 +327,7 @@ func (s *server) handleCollectExpedition(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sc, err := s.loadChar(r.Context(), run.characterID)
+	sc, err := s.loadCharEffective(r.Context(), run.characterID)
 	if err != nil {
 		log.Printf("load character: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load character")
@@ -462,6 +462,10 @@ func (s *server) handleSwitchZone(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load run")
 		return
 	}
+	if run.status != "active" {
+		writeError(w, http.StatusBadRequest, "expedition must be active to switch zone")
+		return
+	}
 
 	if run.zoneID == req.ZoneID {
 		zoneName := newZone.Name
@@ -469,7 +473,7 @@ func (s *server) handleSwitchZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sc, err := s.loadChar(r.Context(), run.characterID)
+	sc, err := s.loadCharEffective(r.Context(), run.characterID)
 	if err != nil {
 		log.Printf("load character: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load character")
@@ -548,11 +552,22 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Load run to get character_id and verify it's active
+	// All state changes must be atomic: lock the run and the character in a single
+	// transaction so concurrent /complete calls can't both apply rewards.
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		log.Printf("complete expedition begin tx: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Lock the expedition run row and verify it is still active.
 	var charID string
-	err := s.pool.QueryRow(r.Context(), `
+	err = tx.QueryRow(r.Context(), `
 		SELECT character_id FROM expedition_runs
 		WHERE id = $1 AND status = 'active'
+		FOR UPDATE
 	`, runID).Scan(&charID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "expedition run not found or already completed")
@@ -564,22 +579,25 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Begin transaction
-	tx, err := s.pool.Begin(r.Context())
-	if err != nil {
-		log.Printf("complete expedition begin tx: %v", err)
-		writeError(w, http.StatusInternalServerError, "transaction error")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	// Apply XP and gold, check level-up
-	sc, err := s.loadChar(r.Context(), charID)
+	// Load character inside the transaction with a row lock.
+	sc := &serverChar{c: &character.Character{}}
+	err = tx.QueryRow(r.Context(), `
+		SELECT id, name, gold, class, level, xp, xp_to_next,
+		       hp, max_hp, attack, defense, critical, cdr
+		FROM characters WHERE id = $1 FOR UPDATE
+	`, charID).Scan(
+		&sc.id, &sc.name, &sc.gold,
+		&sc.c.Class, &sc.c.Level, &sc.c.XP, &sc.c.XPToNext,
+		&sc.c.HP, &sc.c.MaxHP,
+		&sc.c.Attack, &sc.c.Defense, &sc.c.Critical, &sc.c.CDR,
+	)
 	if err != nil {
 		log.Printf("complete expedition load char: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load character")
 		return
 	}
+	character.ApplyClassSkills(sc.c)
+
 	sc.c.XP += req.XP
 	sc.gold += req.Gold
 	character.CheckLevelUp(sc.c, character.NopLevelUpHandler{})
@@ -644,25 +662,11 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		log.Printf("complete expedition commit: %v", err)
-		writeError(w, http.StatusInternalServerError, "transaction commit failed")
-		return
-	}
-
-	// Return effective character stats (with item bonuses)
-	scEff, err := s.loadCharEffective(r.Context(), charID)
-	if err != nil {
-		log.Printf("complete expedition reload char: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not reload character")
-		return
-	}
-
-	// Loot drop: 40% chance on expedition completion
+	// Loot drop inside the transaction so the item grant is atomic with the character update.
 	var droppedItem *droppedItemResponse
 	if rand.Float64() < 0.40 {
 		var drop droppedItemResponse
-		dropErr := s.pool.QueryRow(r.Context(), `
+		dropErr := tx.QueryRow(r.Context(), `
 			SELECT id, name, slot, rarity, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
 			FROM item_templates
 			WHERE source = 'expedition'
@@ -674,7 +678,7 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 			&drop.AttackBonus, &drop.DefenseBonus, &drop.HPBonus, &drop.CritBonus, &drop.CDRBonus,
 		)
 		if dropErr == nil {
-			if _, insertErr := s.pool.Exec(r.Context(),
+			if _, insertErr := tx.Exec(r.Context(),
 				`INSERT INTO inventory_items (character_id, item_template_id) VALUES ($1, $2)`,
 				charID, drop.ID,
 			); insertErr != nil {
@@ -685,6 +689,20 @@ func (s *server) handleCompleteExpedition(w http.ResponseWriter, r *http.Request
 		} else if !errors.Is(dropErr, pgx.ErrNoRows) {
 			log.Printf("complete expedition loot query: %v", dropErr)
 		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("complete expedition commit: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction commit failed")
+		return
+	}
+
+	// Return effective character stats (with item bonuses applied)
+	scEff, err := s.loadCharEffective(r.Context(), charID)
+	if err != nil {
+		log.Printf("complete expedition reload char: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not reload character")
+		return
 	}
 
 	if itemsAdded == nil {

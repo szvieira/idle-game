@@ -113,9 +113,18 @@ func (s *server) handleEnchant(w http.ResponseWriter, r *http.Request) {
 	// 3. Calculate cost.
 	cost := enchantCost(enchantLevel)
 
-	// 4. Check character gold.
+	// 4-6. Check gold, deduct, and increment enchant level in a single transaction so
+	// concurrent enchant requests can't both pass the affordability check and double-spend.
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		log.Printf("enchant begin tx: %v", err)
+		writeError(w, http.StatusInternalServerError, "enchant failed")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
 	var gold int
-	err = s.pool.QueryRow(r.Context(), `SELECT gold FROM characters WHERE id = $1`, req.CharacterID).Scan(&gold)
+	err = tx.QueryRow(r.Context(), `SELECT gold FROM characters WHERE id = $1 FOR UPDATE`, req.CharacterID).Scan(&gold)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
@@ -130,21 +139,23 @@ func (s *server) handleEnchant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Deduct gold.
-	_, err = s.pool.Exec(r.Context(), `UPDATE characters SET gold = gold - $1 WHERE id = $2`, cost, req.CharacterID)
-	if err != nil {
+	if _, err = tx.Exec(r.Context(), `UPDATE characters SET gold = gold - $1 WHERE id = $2`, cost, req.CharacterID); err != nil {
 		log.Printf("enchant deduct gold: %v", err)
 		writeError(w, http.StatusInternalServerError, "enchant failed")
 		return
 	}
 
-	// 6. Increment enchant_level on equipment row (keyed by character_id + inventory_item_id).
-	_, err = s.pool.Exec(r.Context(), `
+	if _, err = tx.Exec(r.Context(), `
 		UPDATE equipment SET enchant_level = enchant_level + 1
 		WHERE character_id = $1 AND inventory_item_id = $2
-	`, req.CharacterID, req.EquipmentID)
-	if err != nil {
+	`, req.CharacterID, req.EquipmentID); err != nil {
 		log.Printf("enchant increment: %v", err)
+		writeError(w, http.StatusInternalServerError, "enchant failed")
+		return
+	}
+
+	if err = tx.Commit(r.Context()); err != nil {
+		log.Printf("enchant commit: %v", err)
 		writeError(w, http.StatusInternalServerError, "enchant failed")
 		return
 	}

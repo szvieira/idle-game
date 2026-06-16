@@ -99,6 +99,14 @@ func (s *server) handleStartRaid(w http.ResponseWriter, r *http.Request) {
 
 	go eng.Run(context.Background())
 
+	// Clean up the raids map when the engine finishes (prevents unbounded growth).
+	go func() {
+		<-eng.Done()
+		s.raidsMu.Lock()
+		delete(s.raids, runID)
+		s.raidsMu.Unlock()
+	}()
+
 	writeJSON(w, http.StatusCreated, map[string]string{"run_id": runID})
 }
 
@@ -178,23 +186,28 @@ func (s *server) handleRaidWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	rctx := r.Context()
+	// The write goroutine must not use r.Context() for conn.Write because that context
+	// is cancelled as soon as the HTTP handler returns (on player disconnect), which would
+	// prevent the raid:end loot payload from being delivered. Use a background context for
+	// writes and watch r.Context().Done() only for detecting disconnect.
 	go func() {
+		wctx := context.Background()
 		for {
 			select {
 			case msg, ok := <-sendCh:
 				if !ok {
 					// Raid ended — roll loot and send raid:end per-player
 					outcome := eng.Outcome()
-					endPayload := buildRaidEndPayload(ctx, s, outcome, charID, charClass)
-					conn.Write(ctx, websocket.MessageText, endPayload)
+					endPayload := buildRaidEndPayload(wctx, s, outcome, charID, charClass)
+					conn.Write(wctx, websocket.MessageText, endPayload)
 					conn.Close(websocket.StatusNormalClosure, "")
 					return
 				}
-				if err := conn.Write(ctx, websocket.MessageText, msg); err != nil {
+				if err := conn.Write(wctx, websocket.MessageText, msg); err != nil {
 					return
 				}
-			case <-ctx.Done():
+			case <-rctx.Done():
 				return
 			}
 		}
@@ -202,12 +215,14 @@ func (s *server) handleRaidWS(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		var msg raid.InputMsg
-		if err := wsjson.Read(ctx, conn, &msg); err != nil {
+		if err := wsjson.Read(rctx, conn, &msg); err != nil {
 			break
 		}
 		msg.CharID = charID
 		eng.HandleInput(charID, msg)
 	}
+	// Mark the player dead so checkEnd can stop the engine goroutine if no one remains.
+	eng.RemovePlayer(charID)
 	conn.Close(websocket.StatusNormalClosure, "")
 }
 

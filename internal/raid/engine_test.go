@@ -18,7 +18,7 @@ func TestEngine_DoesNotEndBeforePlayersJoin(t *testing.T) {
 func TestEngine_MoveInputClampsAndMovesPlayer(t *testing.T) {
 	eng := NewEngine("run-1")
 	eng.SpawnBoss()
-	eng.AddPlayer("char-1", "Aldric", 100, 20, 5, nil)
+	eng.AddPlayer("char-1", "Aldric", 100, 20, 5, "Warrior", nil)
 
 	eng.HandleInput("char-1", InputMsg{Type: "raid:input", Kind: "move_to", X: 9999, Y: -9999})
 	eng.step()

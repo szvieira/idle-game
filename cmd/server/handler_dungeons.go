@@ -124,7 +124,7 @@ func (s *server) handleCreateDungeonRun(w http.ResponseWriter, r *http.Request) 
 
 	// Load participants (MVP: single character)
 	charID := req.Participants[0]
-	sc, err := s.loadChar(r.Context(), charID)
+	sc, err := s.loadCharEffective(r.Context(), charID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
@@ -425,10 +425,12 @@ func (s *server) handleClaimDungeonRun(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE characters
 		SET xp = $1, xp_to_next = $2, gold = $3, level = $4,
-		    hp = $5, max_hp = $6, attack = $7, updated_at = NOW()
-		WHERE id = $8
+		    hp = $5, max_hp = $6, attack = $7,
+		    defense = $8, critical = $9, cdr = $10, updated_at = NOW()
+		WHERE id = $11
 	`, sc.c.XP, sc.c.XPToNext, sc.gold, sc.c.Level,
-		sc.c.HP, sc.c.MaxHP, sc.c.Attack, req.CharacterID,
+		sc.c.HP, sc.c.MaxHP, sc.c.Attack,
+		sc.c.Defense, sc.c.Critical, sc.c.CDR, req.CharacterID,
 	); err != nil {
 		log.Printf("update character: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not update character")
@@ -516,6 +518,36 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Look up the dungeon definition to bound client-supplied rewards and pick loot rarities.
+	// This prevents clients from submitting arbitrarily large XP/gold values.
+	const maxBaseXP = 260  // sum of all room XP in BuildDungeon
+	const maxBaseGold = 150 // sum of all room gold in BuildDungeon
+	dungeonIDForLoot := req.DungeonID
+	if dungeonIDForLoot == "" {
+		dungeonIDForLoot = "normal"
+	}
+	var goldMult float64 = 1.0
+	var dropLootRarities []string
+	if err := s.pool.QueryRow(r.Context(),
+		`SELECT gold_mult, loot_rarities FROM dungeon_definitions WHERE id = $1`,
+		dungeonIDForLoot,
+	).Scan(&goldMult, &dropLootRarities); err != nil {
+		goldMult = 1.0
+		dropLootRarities = []string{"Rare"}
+	}
+	if len(dropLootRarities) == 0 {
+		dropLootRarities = []string{"Rare"}
+	}
+
+	// Cap rewards at what is theoretically achievable for this dungeon tier.
+	maxGold := int(float64(maxBaseGold) * goldMult)
+	if req.XP > maxBaseXP {
+		req.XP = maxBaseXP
+	}
+	if req.Gold > maxGold {
+		req.Gold = maxGold
+	}
+
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
 		log.Printf("complete dungeon begin tx: %v", err)
@@ -524,7 +556,19 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	sc, err := s.loadChar(r.Context(), req.CharacterID)
+	// Load character inside the transaction with a row lock to prevent concurrent completions
+	// from both reading the same base state and applying rewards twice.
+	sc := &serverChar{c: &character.Character{}}
+	err = tx.QueryRow(r.Context(), `
+		SELECT id, name, gold, class, level, xp, xp_to_next,
+		       hp, max_hp, attack, defense, critical, cdr
+		FROM characters WHERE id = $1 FOR UPDATE
+	`, req.CharacterID).Scan(
+		&sc.id, &sc.name, &sc.gold,
+		&sc.c.Class, &sc.c.Level, &sc.c.XP, &sc.c.XPToNext,
+		&sc.c.HP, &sc.c.MaxHP,
+		&sc.c.Attack, &sc.c.Defense, &sc.c.Critical, &sc.c.CDR,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "character not found")
 		return
@@ -534,6 +578,8 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load character")
 		return
 	}
+	character.ApplyClassSkills(sc.c)
+
 	sc.c.XP += req.XP
 	sc.gold += req.Gold
 	character.CheckLevelUp(sc.c, character.NopLevelUpHandler{})
@@ -588,29 +634,10 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		itemsAdded = append(itemsAdded, item)
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		log.Printf("complete dungeon commit: %v", err)
-		writeError(w, http.StatusInternalServerError, "transaction commit failed")
-		return
-	}
-
-	// Resolve loot rarities from dungeon definition (default to Rare if not specified)
-	dungeonIDForLoot := req.DungeonID
-	if dungeonIDForLoot == "" {
-		dungeonIDForLoot = "normal"
-	}
-	var dropLootRarities []string
-	if lootErr := s.pool.QueryRow(r.Context(),
-		`SELECT loot_rarities FROM dungeon_definitions WHERE id = $1`,
-		dungeonIDForLoot,
-	).Scan(&dropLootRarities); lootErr != nil || len(dropLootRarities) == 0 {
-		dropLootRarities = []string{"Rare"}
-	}
-
-	// Loot drop: 100% drop rate for dungeon (hard content)
+	// Loot drop inside the transaction so item grant is atomic with the character update.
 	var droppedItem *droppedItemResponse
 	var drop droppedItemResponse
-	err = s.pool.QueryRow(r.Context(), `
+	err = tx.QueryRow(r.Context(), `
 		SELECT id, name, slot, rarity, attack_bonus, defense_bonus, hp_bonus, crit_bonus, cdr_bonus
 		FROM item_templates
 		WHERE source = 'dungeon'
@@ -623,7 +650,7 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		&drop.AttackBonus, &drop.DefenseBonus, &drop.HPBonus, &drop.CritBonus, &drop.CDRBonus,
 	)
 	if err == nil {
-		if _, insertErr := s.pool.Exec(r.Context(),
+		if _, insertErr := tx.Exec(r.Context(),
 			`INSERT INTO inventory_items (character_id, item_template_id) VALUES ($1, $2)`,
 			req.CharacterID, drop.ID,
 		); insertErr != nil {
@@ -633,6 +660,12 @@ func (s *server) handleCompleteDungeon(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		log.Printf("complete dungeon loot query: %v", err)
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("complete dungeon commit: %v", err)
+		writeError(w, http.StatusInternalServerError, "transaction commit failed")
+		return
 	}
 
 	scEff, err := s.loadCharEffective(r.Context(), req.CharacterID)
